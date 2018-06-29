@@ -166,6 +166,7 @@ type KsVirtualServer struct {
 	ClientSSL    string                `json:"clientssl",omitempty`
 	ServerSSL    string                `json:"serverssl",omitempty`
 	Redirect     bool                  `json:"redirect",omitempty`
+	LBMode       string                `json:"lbmode",omitempty`
 	IRules       []string              `json:"rules",omitempty`
 	Members      []KsVSMember          `json:"members",omitempty`
 	Monitor      KsVSMonitorAttributes `json:"monitors",omitempty`
@@ -249,6 +250,10 @@ func getKubernetesState() (KubernetesState, error) {
 			for idx := range parts {
 				vs.IRules = append( vs.IRules, parts[idx])
 			}
+		}
+
+		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/balance"]; ok == true {
+			vs.LBMode = value
 		}
 
 		// Find a matching service
