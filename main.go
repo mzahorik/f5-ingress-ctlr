@@ -166,6 +166,8 @@ type KsVirtualServer struct {
 	ClientSSL    string                `json:"clientssl",omitempty`
 	ServerSSL    string                `json:"serverssl",omitempty`
 	Redirect     bool                  `json:"redirect",omitempty`
+	DefPersist   string                `json:"persist",omitempty`
+	FBPersist    string                `json:"fallbackPersist",omitempty`
 	LBMode       string                `json:"lbmode",omitempty`
 	IRules       []string              `json:"rules",omitempty`
 	Members      []KsVSMember          `json:"members",omitempty`
@@ -254,6 +256,14 @@ func getKubernetesState() (KubernetesState, error) {
 
 		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/balance"]; ok == true {
 			vs.LBMode = value
+		}
+
+		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/defaultPersist"]; ok == true {
+			vs.DefPersist = value
+		}
+
+		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/fallbackPersist"]; ok == true {
+			vs.FBPersist = value
 		}
 
 		// Find a matching service
