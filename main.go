@@ -113,7 +113,7 @@ func buildCurrentLTMState() (LTMState, error) {
 
 	var cs LTMState
 
-	var f5_user, f5_password string
+	var f5_user, f5_password string, f5_host
 
 	if f5_user = os.Getenv("F5_USER"); f5_user == "" {
 		return cs, fmt.Errorf("F5_USER environment variable must be set")
@@ -123,8 +123,11 @@ func buildCurrentLTMState() (LTMState, error) {
 		return cs, fmt.Errorf("F5_PASSWORD environment variable must be set")
 	}
 
+	if f5_host = os.Getenv("F5_HOST"); f5_host == "" {
+		return cs, fmt.Errorf("F5_HOST environment variable must be set")
+	}
 
-	f5 := bigip.NewSession("10.226.113.254", f5_user, f5_password, &bigip.ConfigOptions{})
+	f5 := bigip.NewSession(f5_host, f5_user, f5_password, &bigip.ConfigOptions{})
 
 	pools, err := f5.Pools()
 	if err != nil {
