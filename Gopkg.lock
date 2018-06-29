@@ -169,6 +169,18 @@
   version = "v2.0.1"
 
 [[projects]]
+  branch = "master"
+  name = "github.com/scottdware/go-bigip"
+  packages = ["."]
+  revision = "fb6f8eaea1326164f3f57a7fa6f0d9f1ea91bbbd"
+
+[[projects]]
+  name = "github.com/sirupsen/logrus"
+  packages = ["."]
+  revision = "c155da19408a8799da419ed3eeb0cb5db0ad5dbc"
+  version = "v1.0.5"
+
+[[projects]]
   name = "github.com/spf13/pflag"
   packages = ["."]
   revision = "583c0c0531f06d5278b7d917446061adc344b5cd"
@@ -373,6 +385,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "4de30bfe9a979fa224f4575caeabd01345be4edab9cf6146599391f8d58c5622"
+  inputs-digest = "50c45dbd83826ae34f58b698e70869eb412534944859615e7a6137d19bdb2332"
   solver-name = "gps-cdcl"
   solver-version = 1

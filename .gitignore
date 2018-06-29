@@ -24,3 +24,5 @@ Icon
 # We choose to NOT include vendor dependencies in our repo, trusting they're
 # stable enough and that developers will download and install dep.
 vendor/
+
+main
