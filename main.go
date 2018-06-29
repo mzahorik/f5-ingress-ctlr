@@ -165,7 +165,7 @@ type KsVirtualServer struct {
 	Port         int32                 `json:"port"`
 	ClientSSL    string                `json:"clientssl",omitempty`
 	ServerSSL    string                `json:"serverssl",omitempty`
-	HTTPRedirect bool                  `json:"redirect",omitempty`
+	Redirect     bool                  `json:"redirect",omitempty`
 	IRules       []string              `json:"rules",omitempty`
 	Members      []KsVSMember          `json:"members",omitempty`
 	Monitor      KsVSMonitorAttributes `json:"monitors",omitempty`
@@ -217,11 +217,17 @@ func getKubernetesState() (KubernetesState, error) {
 
 		if len(ingress.Spec.TLS) != 0 {
 			vs.ClientSSL = ingress.Spec.TLS[0].SecretName
+			vs.Redirect = true
 			if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/https-port"]; ok == true {
 				port, _ := strconv.ParseInt(value, 10, 32)
 				vs.Port = int32(port)
 			} else {
 				vs.Port = 443
+			}
+			if value, ok := ingress.ObjectMeta.Annotations["ingress.kubernetes.io/ssl-redirect"]; ok == true {
+				if value == "false" {
+					vs.Redirect = false
+				}
 			}
 		} else {
 			if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/http-port"]; ok == true {
