@@ -113,7 +113,7 @@ func buildCurrentLTMState() (LTMState, error) {
 
 	var cs LTMState
 
-	var f5_user, f5_password string, f5_host
+	var f5_user, f5_password, f5_host string
 
 	if f5_user = os.Getenv("F5_USER"); f5_user == "" {
 		return cs, fmt.Errorf("F5_USER environment variable must be set")
