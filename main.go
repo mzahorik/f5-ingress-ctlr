@@ -267,10 +267,13 @@ func getKubernetesState() (KubernetesState, error) {
 		}
 
 		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/health"]; ok == true {
-			err := json.Unmarshal([]byte(value), &vs.Monitor)
+			var monitors []KsVSMonitorAttributes
+
+			err := json.Unmarshal([]byte(value), &monitors)
 			if err != nil {
 				log.Debugf("health monitor JSON parsing failed")
 			}
+			vs.Monitors = monitors[0]
 		}
 
 		// Find a matching service
