@@ -241,10 +241,25 @@ func getKubernetesState() (KubernetesState, error) {
 			}
 		}
 
-		vs.Monitor.Type = "http"	// Default, will be overridden later when parsing annotations
+		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/health"]; ok == true {
+			var monitors []KsVSMonitorAttributes
+
+			err := json.Unmarshal([]byte(value), &monitors)
+			if err != nil {
+				log.Debugf("health monitor JSON parsing failed")
+			}
+			vs.Monitor = monitors[0]
+		}
+
 		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/serverssl"]; ok == true {
 			vs.ServerSSL = value
-			vs.Monitor.Type = "https"	// Default for https, again, can be overridden later
+			if vs.Monitor.Type == "" {
+				vs.Monitor.Type = "https"
+			}
+		}
+
+		if vs.Monitor.Type == "" {
+			vs.Monitor.Type = "http"
 		}
 
 		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/rules"]; ok == true {
@@ -264,16 +279,6 @@ func getKubernetesState() (KubernetesState, error) {
 
 		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/fallbackPersist"]; ok == true {
 			vs.FBPersist = value
-		}
-
-		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/health"]; ok == true {
-			var monitors []KsVSMonitorAttributes
-
-			err := json.Unmarshal([]byte(value), &monitors)
-			if err != nil {
-				log.Debugf("health monitor JSON parsing failed")
-			}
-			vs.Monitors = monitors[0]
 		}
 
 		// Find a matching service
