@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -210,7 +211,15 @@ func getKubernetesState() (KubernetesState, error) {
 		vs.Namespace = ingress.GetNamespace()
 
 		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/ip"]; ok == true {
-			vs.IP = value
+			if ip := net.ParseIP(value); ip != nil {
+				vs.IP = value
+			} else {
+				log.WithFields(log.Fields{
+				  "ingress": vs.Name,
+				  "namespace": vs.Namespace,
+				  "ip": value,
+				}).Errorf("Invalid IP address for ip annotation")
+			}
 		} else {
 			log.WithFields(log.Fields{
 			  "ingress": vs.Name,
@@ -396,7 +405,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	globalConfig.Partition = "Automation2"
+	globalConfig.Partition = "k8s-auto-ny2"
 
 	desiredState, err := getKubernetesState()
 	if err != nil {
