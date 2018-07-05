@@ -128,7 +128,14 @@ func buildCurrentLTMState() (LTMState, error) {
 		return cs, fmt.Errorf("F5_HOST environment variable must be set")
 	}
 
-	f5 := bigip.NewSession(f5_host, f5_user, f5_password, &bigip.ConfigOptions{})
+	f5, err := bigip.NewTokenSession(f5_host, f5_user, f5_password, "tmos", &bigip.ConfigOptions{})
+
+	if err != nil {
+		log.Debugf("Failed to get token")
+		return cs, err
+	}
+
+	log.Debugf("Connected to F5")
 
 	pools, err := f5.Pools()
 	if err != nil {
@@ -136,8 +143,11 @@ func buildCurrentLTMState() (LTMState, error) {
 		return cs, err
 	}
 
+	log.Debugf("Successfully fetched pools")
 	for _, pool := range pools.Pools {
+		log.Debugf("Found a pool")
 		if pool.Partition == globalConfig.Partition {
+			log.Debugf("Pool matches partition name")
 			cs.Pools = append( cs.Pools, pool)
 		}
 	}
@@ -192,12 +202,6 @@ func getKubernetesState() (KubernetesState, error) {
 		return ks, err
 	}
 	log.Debugf("Successfully fetched all Service objects from Kubernetes")
-
-//	pods, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{})
-//	if err != nil {
-//		return ks, err
-//	}
-//	log.Debugf("Successfully fetched all Pod objects from Kubernetes")
 
 	// Loop through the Ingress objects, building complete virtual server objects
 
@@ -356,35 +360,9 @@ func getKubernetesState() (KubernetesState, error) {
 			}).Debugf("No pods found, creating empty Ingress")
 		}
 
-/*		if pods, err := clientset.Core().Pods(name).List(api.ListOptions{LabelSelector: set.AsSelector()}); err != nil {
-			subsets := endpoint.Subsets[0]
-			for _,address := range subsets.Addresses {
-				var pm bigip.PoolMember
-				pm.Address = address.IP
-				*pool.Members = append( *pool.Members, pm )
-			}
-		}
-*/
-		// Build the pool
-/*
-		pool.Name = "ingress_" + vs.Namespace + "_" + vs.Name
-		pool.Partition = globalConfig.Partition
-		ds.Pools = append( ds.Pools, pool )
-*/
-		// Build the virtual server,and have it reference the pool name.
+		// Attach the new virtual server to the slice
 
 		ks = append( ks, vs )
-/*
-	fmt.Printf("\nAnnotations: ")
-		for key, value := range ingress.Annotations {
-			if key == "kubectl.kubernetes.io/last-applied-configuration" {
-				continue
-			}
-			fmt.Printf("%s: %s\n             ", key, value)
-		}
-
-		fmt.Printf("\n")
-*/
 	}
 
 	return ks, nil
@@ -396,7 +374,7 @@ func main() {
 
 	// initialize the Kubernetes connection
 
-	// log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.DebugLevel)
 
 	err := initKubernetes()
 	if err != nil || clientset == nil {
@@ -417,7 +395,7 @@ func main() {
 	desiredJson, _ := json.MarshalIndent(desiredState,"", "  ")
 	fmt.Printf(string(desiredJson))
 
-/*	currentState, err := buildCurrentLTMState()
+	currentState, err := buildCurrentLTMState()
 	if err != nil {
 		log.Error("Could not fetch current state from F5")
 		log.Error(err.Error())
@@ -426,31 +404,4 @@ func main() {
 
 	currentJson, _ := json.MarshalIndent(currentState,"", "  ")
 	fmt.Printf(string(currentJson))
-*/
-	// old stuff
-
-/*
-	pods, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{})
-	if err != nil {
-		panic(err.Error())
-	}
-	fmt.Printf("There are %d pods in the cluster\n", len(pods.Items))
-
-	// Examples for error handling:
-	// - Use helper functions like e.g. errors.IsNotFound()
-	// - And/or cast to StatusError and use its properties like e.g. ErrStatus.Message
-	namespace := "lsm-dev6"
-	pod := "example-xxxxx"
-	_, err = clientset.CoreV1().Pods(namespace).Get(pod, metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		fmt.Printf("Pod %s in namespace %s not found\n", pod, namespace)
-	} else if statusError, isStatus := err.(*errors.StatusError); isStatus {
-		fmt.Printf("Error getting pod %s in namespace %s: %v\n",
-			pod, namespace, statusError.ErrStatus.Message)
-	} else if err != nil {
-		panic(err.Error())
-	} else {
-		fmt.Printf("Found pod %s in namespace %s\n", pod, namespace)
-	}
-*/
 }
