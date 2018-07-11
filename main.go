@@ -249,9 +249,9 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			if vs.DefPersist != "" {
 				splitString := strings.Split(vs.DefPersist, "/")
 				defPersist := bigip.Persistence{
-					Name: splitString[2],
+					Name:      splitString[2],
 					Partition: splitString[1],
-					Default: "yes",
+					Default:   "yes",
 				}
 				vsConfig.Persistence = append([]bigip.Persistence{}, defPersist)
 			}
@@ -293,7 +293,7 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 				vsConfig.Pool = fmt.Sprintf("/%s/%s", globalConfig.Partition, f5PoolName(vs))
 			}
 
-			if len(vs.IRules)>0 {
+			if len(vs.IRules) > 0 {
 				vsConfig.Rules = vs.IRules
 			}
 
