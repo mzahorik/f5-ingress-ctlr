@@ -24,18 +24,17 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"strconv"
+	"strings"
 
-	"github.com/scottdware/go-bigip"
+	"github.com/mzahorik/go-bigip"
+	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	log "github.com/sirupsen/logrus"
 )
 
 var clientset *kubernetes.Clientset
@@ -48,33 +47,7 @@ type LTMState struct {
 	Virtuals []bigip.VirtualServer `json:"virtuals",omitempty`
 	Pools    []bigip.Pool          `json:"pools",omitempty`
 	Monitors []bigip.Monitor       `json:"monitors",omitempty`
-}
-
-type MyJSONFormatter struct {
-	Level string `json:"level"`
-	Msg   string `json:"msg"`
-	Time  string `json:"time"`
-	File  string `json:"file"`
-	Line  int    `json:"line"`
-}
-
-func (f *MyJSONFormatter) Format(entry *log.Entry) ([]byte, error) {
-
-	entry.Time = entry.Time.UTC()
-	logrusJF := &(log.JSONFormatter{})
-	bytes, _ := logrusJF.Format(entry)
-
-	myF := MyJSONFormatter{}
-	json.Unmarshal(bytes, &myF)
-	_, file, no, _ := runtime.Caller(7)
-	myF.File = file
-	myF.Line = no
-
-	jsonStr, err := json.Marshal(myF)
-	if err == nil {
-		jsonStr = append( jsonStr, '\n')
-	}
-	return jsonStr, err
+	Nodes    []bigip.Node          `json:"nodes",omitempty`
 }
 
 // Initialize the connection to Kubernetes
@@ -110,11 +83,175 @@ func initKubernetes() error {
 	return err
 }
 
+func f5VirtualServerName(vs KsVirtualServer) string {
+
+	portString := strconv.FormatInt(int64(vs.Port), 10)
+
+	vsName := "ingress_" + vs.Namespace + "_" + vs.Name + "_" + portString
+
+	return vsName
+}
+
+func f5PoolName(vs KsVirtualServer) string {
+
+	pName := "ingress_" + vs.Namespace + "_" + vs.Name
+
+	return pName
+}
+
+func f5MonitorName(vs KsVirtualServer) string {
+
+	mName := "ingress_" + vs.Namespace + "_" + vs.Name + "_" + vs.Monitor.Type
+
+	return mName
+}
+
+var f5 *bigip.BigIP
+
+func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
+
+	// Step through virtual servers, creating as necessary
+
+	metadata := bigip.Metadata{
+		Name:    "f5-ingress-ctlr-managed",
+		Value:   "true",
+		Persist: "true",
+	}
+
+	for _, vs := range k8sState {
+		vsName := f5VirtualServerName(vs)
+		found := false
+		for _, f5vs := range f5State.Virtuals {
+			if f5vs.Name == vsName {
+				found = true
+			}
+		}
+		if !found {
+
+			monitorConfig := &bigip.Monitor{
+				Interval:      vs.Monitor.Interval,
+				Name:          f5MonitorName(vs),
+				Partition:     globalConfig.Partition,
+				ReceiveString: vs.Monitor.Receive,
+				SendString:    vs.Monitor.Send,
+			}
+			monitorConfig.Metadata = append([]bigip.Metadata{}, metadata)
+
+			log.WithFields(log.Fields{
+				"name": monitorConfig.Name,
+				"type": vs.Monitor.Type,
+			}).Debugf("Adding new monitor")
+			log.Debugf(fmt.Sprintf("Config: %+v", monitorConfig))
+
+			monitorOk := true
+			if err := f5.AddMonitor(monitorConfig, vs.Monitor.Type); err != nil {
+				log.WithFields(log.Fields{
+					"name": monitorConfig.Name,
+					"type": vs.Monitor.Type,
+				}).Infof("Monitor creation failed, proceeding without it")
+				log.Infof("Error: " + err.Error())
+				monitorOk = false
+			}
+
+			poolConfig := &bigip.Pool{
+				LoadBalancingMode: vs.LBMode,
+				Name:              f5PoolName(vs),
+				Partition:         globalConfig.Partition,
+			}
+			poolConfig.Metadata = append([]bigip.Metadata{}, metadata)
+			if monitorOk {
+				poolConfig.Monitor = fmt.Sprintf("/%s/%s", globalConfig.Partition, f5MonitorName(vs))
+			}
+
+			log.WithFields(log.Fields{
+				"name": poolConfig.Name,
+			}).Debugf("Adding new pool")
+			log.Debugf(fmt.Sprintf("Config: %+v", poolConfig))
+
+			poolOk := true
+			if err := f5.AddPool(poolConfig); err != nil {
+				log.WithFields(log.Fields{
+					"name": poolConfig.Name,
+				}).Infof("Pool creation failed, proceeding without it")
+				log.Infof("Error: " + err.Error())
+				poolOk = false
+			}
+
+			vsNewIP := strings.Replace(vs.IP, "10.226.197", "10.226.195", 1) // A temporary thing while working in the lab to use existing ingress on new network
+
+			vsConfig := &bigip.VirtualServer{
+				Destination: fmt.Sprintf("/%s/%s:%d", globalConfig.Partition, vsNewIP, vs.Port),
+				IPProtocol:  "tcp",
+				Mask:        "255.255.255.255",
+				Name:        vsName,
+				Partition:   globalConfig.Partition,
+				Source:      "0.0.0.0/0",
+			}
+			vsConfig.Metadata = append([]bigip.Metadata{}, metadata)
+			vsConfig.SourceAddressTranslation.Type = "automap"
+			vsConfig.Profiles = []bigip.Profile{}
+			httpProfile := bigip.Profile{
+				Context:   "all",
+				Name:      "http",
+				Partition: "Common",
+			}
+			vsConfig.Profiles = append(vsConfig.Profiles, httpProfile)
+			tcpProfile := bigip.Profile{
+				Context:   "all",
+				Name:      "tcp",
+				Partition: "Common",
+			}
+			vsConfig.Profiles = append(vsConfig.Profiles, tcpProfile)
+			if vs.ClientSSL != "" {
+				splitString := strings.Split(vs.ClientSSL, "/")
+				clientSSLProfile := bigip.Profile{
+					Context:   "clientside",
+					Name:      splitString[2],
+					Partition: splitString[1],
+				}
+				vsConfig.Profiles = append(vsConfig.Profiles, clientSSLProfile)
+			}
+			if vs.ServerSSL != "" {
+				splitString := strings.Split(vs.ServerSSL, "/")
+				serverSSLProfile := bigip.Profile{
+					Context:   "serverside",
+					Name:      splitString[2],
+					Partition: splitString[1],
+				}
+				vsConfig.Profiles = append(vsConfig.Profiles, serverSSLProfile)
+			}
+			if poolOk {
+				vsConfig.Pool = fmt.Sprintf("/%s/%s", globalConfig.Partition, f5PoolName(vs))
+			}
+
+			// Need to add pool members here
+
+			log.WithFields(log.Fields{
+				"name": vsConfig.Name,
+			}).Debugf("Adding new virtual server")
+			log.Debugf(fmt.Sprintf("Config: %+v", vsConfig))
+
+			log.Debugf("Creating virtual server")
+			if err := f5.AddVirtualServer(vsConfig); err != nil {
+				log.Infof("Virtual server failed to create, skipping virtual server")
+				log.WithFields(log.Fields{
+					"name": vsConfig.Name,
+				}).Infof("Virtual server creation failed, proceeding without it")
+				log.Infof("Error: " + err.Error())
+			}
+		}
+
+	}
+	return nil
+}
+
 func buildCurrentLTMState() (LTMState, error) {
 
 	var cs LTMState
 
 	var f5_user, f5_password, f5_host string
+
+	var err error
 
 	if f5_user = os.Getenv("F5_USER"); f5_user == "" {
 		return cs, fmt.Errorf("F5_USER environment variable must be set")
@@ -128,7 +265,7 @@ func buildCurrentLTMState() (LTMState, error) {
 		return cs, fmt.Errorf("F5_HOST environment variable must be set")
 	}
 
-	f5, err := bigip.NewTokenSession(f5_host, f5_user, f5_password, "tmos", &bigip.ConfigOptions{})
+	f5, err = bigip.NewTokenSession(f5_host, f5_user, f5_password, "tmos", &bigip.ConfigOptions{})
 
 	if err != nil {
 		log.Debugf("Failed to get token")
@@ -137,18 +274,113 @@ func buildCurrentLTMState() (LTMState, error) {
 
 	log.Debugf("Connected to F5")
 
-	pools, err := f5.Pools()
+	virtualServers, err := f5.VirtualServers()
 	if err != nil {
-		log.Debugf("Failed to retrieve pool information")
+		log.Debugf("Failed to retrieve F5 virtual server information")
 		return cs, err
 	}
 
-	log.Debugf("Successfully fetched pools")
+	pools, err := f5.Pools()
+	if err != nil {
+		log.Debugf("Failed to retrieve F5 pool information")
+		return cs, err
+	}
+
+	monitors, err := f5.Monitors()
+	if err != nil {
+		log.Debugf("Failed to retrieve F5 monitor information")
+		return cs, err
+	}
+
+	nodes, err := f5.Nodes()
+	if err != nil {
+		log.Debugf("Failed to retrieve F5 node information")
+		return cs, err
+	}
+
+	// Clean the virtual server list - only copy over virtual server
+	// entries that are in our specified partition, and have a
+	// metadata entry of "f5-ingress-ctlr-managed" set to "true"
+
+	for _, virtualServer := range virtualServers.VirtualServers {
+		log.WithFields(log.Fields{
+			"name":      virtualServer.Name,
+			"partition": virtualServer.Partition,
+		}).Debugf("Assessing virtual server")
+		if virtualServer.Partition == globalConfig.Partition {
+			for _, metadata := range virtualServer.Metadata {
+				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
+					log.WithFields(log.Fields{
+						"name":      virtualServer.Name,
+						"partition": virtualServer.Partition,
+					}).Debugf("Virtual server is in specified partition and is managed by this module")
+					cs.Virtuals = append(cs.Virtuals, virtualServer)
+					break
+				}
+			}
+		}
+	}
+
+	// Same with pools
+
 	for _, pool := range pools.Pools {
-		log.Debugf("Found a pool")
+		log.WithFields(log.Fields{
+			"name":      pool.Name,
+			"partition": pool.Partition,
+		}).Debugf("Assessing pool")
 		if pool.Partition == globalConfig.Partition {
-			log.Debugf("Pool matches partition name")
-			cs.Pools = append( cs.Pools, pool)
+			for _, metadata := range pool.Metadata {
+				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
+					log.WithFields(log.Fields{
+						"name":      pool.Name,
+						"partition": pool.Partition,
+					}).Debugf("Pool is in specified partition and is managed by this module")
+					cs.Pools = append(cs.Pools, pool)
+					break
+				}
+			}
+		}
+	}
+
+	// Same with monitors
+
+	for _, monitor := range monitors {
+		log.WithFields(log.Fields{
+			"name":      monitor.Name,
+			"partition": monitor.Partition,
+		}).Debugf("Assessing monitor")
+		if monitor.Partition == globalConfig.Partition {
+			for _, metadata := range monitor.Metadata {
+				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
+					log.WithFields(log.Fields{
+						"name":      monitor.Name,
+						"partition": monitor.Partition,
+					}).Debugf("Monitor is in specified partition and is managed by this module")
+					cs.Monitors = append(cs.Monitors, monitor)
+					break
+				}
+			}
+		}
+	}
+
+	// Finally, same with nodes
+
+	for _, node := range nodes.Nodes {
+		log.WithFields(log.Fields{
+			"name":      node.Name,
+			"partition": node.Partition,
+		}).Debugf("Assessing node")
+		if node.Partition == globalConfig.Partition {
+			for _, metadata := range node.Metadata {
+				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
+					log.WithFields(log.Fields{
+						"name":      node.Name,
+						"partition": node.Partition,
+					}).Debugf("Node is in specified partition and is managed by this module")
+					cs.Nodes = append(cs.Nodes, node)
+					break
+				}
+			}
 		}
 	}
 
@@ -170,19 +402,19 @@ type KsVSMember struct {
 }
 
 type KsVirtualServer struct {
-	Name         string                `json:"name"`
-	Namespace    string                `json:"namespace"`
-	IP           string                `json:"ip"`
-	Port         int32                 `json:"port"`
-	ClientSSL    string                `json:"clientssl",omitempty`
-	ServerSSL    string                `json:"serverssl",omitempty`
-	Redirect     bool                  `json:"redirect",omitempty`
-	DefPersist   string                `json:"persist",omitempty`
-	FBPersist    string                `json:"fallbackPersist",omitempty`
-	LBMode       string                `json:"lbmode",omitempty`
-	IRules       []string              `json:"rules",omitempty`
-	Members      []KsVSMember          `json:"members",omitempty`
-	Monitor      KsVSMonitorAttributes `json:"monitors",omitempty`
+	Name       string                `json:"name"`
+	Namespace  string                `json:"namespace"`
+	IP         string                `json:"ip"`
+	Port       int32                 `json:"port"`
+	ClientSSL  string                `json:"clientssl",omitempty`
+	ServerSSL  string                `json:"serverssl",omitempty`
+	Redirect   bool                  `json:"redirect",omitempty`
+	DefPersist string                `json:"persist",omitempty`
+	FBPersist  string                `json:"fallbackPersist",omitempty`
+	LBMode     string                `json:"lbmode",omitempty`
+	IRules     []string              `json:"rules",omitempty`
+	Members    []KsVSMember          `json:"members",omitempty`
+	Monitor    KsVSMonitorAttributes `json:"monitors",omitempty`
 }
 
 type KubernetesState []KsVirtualServer
@@ -219,15 +451,15 @@ func getKubernetesState() (KubernetesState, error) {
 				vs.IP = value
 			} else {
 				log.WithFields(log.Fields{
-				  "ingress": vs.Name,
-				  "namespace": vs.Namespace,
-				  "ip": value,
+					"ingress":   vs.Name,
+					"namespace": vs.Namespace,
+					"ip":        value,
 				}).Errorf("Invalid IP address for ip annotation")
 			}
 		} else {
 			log.WithFields(log.Fields{
-			  "ingress": vs.Name,
-			  "namespace": vs.Namespace,
+				"ingress":   vs.Name,
+				"namespace": vs.Namespace,
 			}).Infof("No IP address, creating headless virtual server")
 		}
 
@@ -278,7 +510,7 @@ func getKubernetesState() (KubernetesState, error) {
 		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/rules"]; ok == true {
 			parts := strings.Split(value, ",")
 			for idx := range parts {
-				vs.IRules = append( vs.IRules, parts[idx])
+				vs.IRules = append(vs.IRules, parts[idx])
 			}
 		}
 
@@ -307,9 +539,9 @@ func getKubernetesState() (KubernetesState, error) {
 		}
 		if err != nil {
 			log.WithFields(log.Fields{
-			  "ingress": vs.Name,
-			  "namespace": vs.Namespace,
-			  "service": service.GetName(),
+				"ingress":   vs.Name,
+				"namespace": vs.Namespace,
+				"service":   service.GetName(),
 			}).Infof("Service not found, skipping this Ingress")
 			continue
 		}
@@ -329,48 +561,46 @@ func getKubernetesState() (KubernetesState, error) {
 					member.Name = pod.GetName()
 					member.IP = pod.Status.PodIP
 					member.Port = int32(ingress.Spec.Backend.ServicePort.IntValue())
-					vs.Members = append( vs.Members, member)
+					vs.Members = append(vs.Members, member)
 					log.WithFields(log.Fields{
-					  "ingress": vs.Name,
-					  "namespace": vs.Namespace,
-					  "pod": member.Name,
-					  "ip": member.IP,
-					  "port": member.Port,
+						"ingress":   vs.Name,
+						"namespace": vs.Namespace,
+						"pod":       member.Name,
+						"ip":        member.IP,
+						"port":      member.Port,
 					}).Debugf("Adding pod to virtual server")
-			} else {
+				} else {
 					log.WithFields(log.Fields{
-					  "ingress": vs.Name,
-					  "namespace": vs.Namespace,
-					  "pod": pod.GetName(),
+						"ingress":   vs.Name,
+						"namespace": vs.Namespace,
+						"pod":       pod.GetName(),
 					}).Infof("Skipping pod that is not running")
 				}
 			}
 		} else {
 			log.WithFields(log.Fields{
-			  "ingress": vs.Name,
-			  "namespace": vs.Namespace,
+				"ingress":   vs.Name,
+				"namespace": vs.Namespace,
 			}).Debugf("Call to fetch pods failed")
 			log.Debugf(err.Error())
 		}
 
 		if vs.Members == nil {
 			log.WithFields(log.Fields{
-			  "ingress": vs.Name,
-			  "namespace": vs.Namespace,
+				"ingress":   vs.Name,
+				"namespace": vs.Namespace,
 			}).Debugf("No pods found, creating empty Ingress")
 		}
 
 		// Attach the new virtual server to the slice
 
-		ks = append( ks, vs )
+		ks = append(ks, vs)
 	}
 
 	return ks, nil
 }
 
 func main() {
-
-//	log.SetFormatter(&MyJSONFormatter{})
 
 	// initialize the Kubernetes connection
 
@@ -392,8 +622,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	desiredJson, _ := json.MarshalIndent(desiredState,"", "  ")
+	desiredJson, _ := json.MarshalIndent(desiredState, "", "  ")
 	fmt.Printf(string(desiredJson))
+
+	for _, vs := range desiredState {
+		fmt.Printf("%s\n", f5VirtualServerName(vs))
+	}
 
 	currentState, err := buildCurrentLTMState()
 	if err != nil {
@@ -402,6 +636,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	currentJson, _ := json.MarshalIndent(currentState,"", "  ")
+	currentJson, _ := json.MarshalIndent(currentState, "", "  ")
 	fmt.Printf(string(currentJson))
+
+	err = applyF5Diffs(desiredState, currentState)
+	if err != nil {
+		log.Error("Could not apply Kubernetes state to F5")
+		log.Error(err.Error())
+		os.Exit(1)
+	}
 }
