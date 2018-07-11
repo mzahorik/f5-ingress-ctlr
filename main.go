@@ -134,6 +134,8 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 		Persist: "true",
 	}
 
+	description := "Managed by Kubernetes. Manual changes will be lost."
+
 	for _, vs := range k8sState {
 		vsName := f5VirtualServerName(vs)
 		found := false
@@ -145,6 +147,7 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 		if !found {
 
 			monitorConfig := &bigip.Monitor{
+				Description:   description,
 				Interval:      vs.Monitor.Interval,
 				Name:          f5MonitorName(vs),
 				Partition:     globalConfig.Partition,
@@ -170,6 +173,7 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			}
 
 			poolConfig := &bigip.Pool{
+				Description:       description,
 				LoadBalancingMode: vs.LBMode,
 				Name:              f5PoolName(vs),
 				Partition:         globalConfig.Partition,
@@ -184,9 +188,10 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			for idx, member := range vs.Members {
 				nodeName := f5NodeName(vs, idx)
 				nodeConfig := &bigip.Node{
-					Address:   member.IP,
-					Name:      nodeName,
-					Partition: globalConfig.Partition,
+					Description: description,
+					Address:     member.IP,
+					Name:        nodeName,
+					Partition:   globalConfig.Partition,
 				}
 				nodeConfig.Metadata = append([]bigip.Metadata{}, metadata)
 				if err := f5.AddNode(nodeConfig); err != nil {
@@ -204,8 +209,9 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 					"ip":   member.IP,
 				}).Debugf("Adding pool member")
 				memberConfig := bigip.PoolMember{
-					Name:      memberName,
-					Partition: globalConfig.Partition,
+					Description: description,
+					Name:        memberName,
+					Partition:   globalConfig.Partition,
 				}
 				memberConfig.Metadata = append([]bigip.Metadata{}, metadata)
 				poolMembers = append(poolMembers, memberConfig)
@@ -230,6 +236,7 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			vsNewIP := strings.Replace(vs.IP, "10.226.197", "10.226.195", 1) // A temporary thing while working in the lab to use existing ingress on new network
 
 			vsConfig := &bigip.VirtualServer{
+				Description: description,
 				Destination: fmt.Sprintf("/%s/%s:%d", globalConfig.Partition, vsNewIP, vs.Port),
 				IPProtocol:  "tcp",
 				Mask:        "255.255.255.255",

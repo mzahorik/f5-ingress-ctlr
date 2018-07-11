@@ -1,4 +1,4 @@
-docker build -t mzahorik/f5-ctlr:latest .
+docker build --no-cache -t mzahorik/f5-ctlr:latest .
 if [ $? != 0 ]; then
   echo "Build failure"
   exit 1
