@@ -99,11 +99,27 @@ func f5PoolName(vs KsVirtualServer) string {
 	return pName
 }
 
+func f5PoolMemberName(vs KsVirtualServer, memberIndex int) string {
+
+	portString := strconv.FormatInt(int64(vs.Members[memberIndex].Port), 10)
+
+	mbrName := vs.Namespace + "_" + vs.Members[memberIndex].Name + ":" + portString
+
+	return mbrName
+}
+
 func f5MonitorName(vs KsVirtualServer) string {
 
 	mName := "ingress_" + vs.Namespace + "_" + vs.Name + "_" + vs.Monitor.Type
 
 	return mName
+}
+
+func f5NodeName(vs KsVirtualServer, memberIndex int) string {
+
+	nName := vs.Namespace + "_" + vs.Members[memberIndex].Name
+
+	return nName
 }
 
 var f5 *bigip.BigIP
@@ -163,9 +179,43 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 				poolConfig.Monitor = fmt.Sprintf("/%s/%s", globalConfig.Partition, f5MonitorName(vs))
 			}
 
+			poolMembers := []bigip.PoolMember{}
+
+			for idx, member := range vs.Members {
+				nodeName := f5NodeName(vs, idx)
+				nodeConfig := &bigip.Node{
+					Address:   member.IP,
+					Name:      nodeName,
+					Partition: globalConfig.Partition,
+				}
+				nodeConfig.Metadata = append([]bigip.Metadata{}, metadata)
+				if err := f5.AddNode(nodeConfig); err != nil {
+					log.WithFields(log.Fields{
+						"node": nodeConfig.Name,
+					}).Infof("Node creation failed, proceeding without it")
+					log.Infof("Error: " + err.Error())
+					continue
+				}
+
+				memberName := f5PoolMemberName(vs, idx)
+				log.WithFields(log.Fields{
+					"pool": poolConfig.Name,
+					"name": memberName,
+					"ip":   member.IP,
+				}).Debugf("Adding pool member")
+				memberConfig := bigip.PoolMember{
+					Name:      memberName,
+					Partition: globalConfig.Partition,
+				}
+				memberConfig.Metadata = append([]bigip.Metadata{}, metadata)
+				poolMembers = append(poolMembers, memberConfig)
+			}
+
+			poolConfig.Members = &poolMembers
+
 			log.WithFields(log.Fields{
 				"name": poolConfig.Name,
-			}).Debugf("Adding new pool")
+			}).Debugf("Creating new pool")
 			log.Debugf(fmt.Sprintf("Config: %+v", poolConfig))
 
 			poolOk := true
@@ -189,6 +239,18 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			}
 			vsConfig.Metadata = append([]bigip.Metadata{}, metadata)
 			vsConfig.SourceAddressTranslation.Type = "automap"
+			if vs.DefPersist != "" {
+				splitString := strings.Split(vs.DefPersist, "/")
+				defPersist := bigip.Persistence{
+					Name: splitString[2],
+					Partition: splitString[1],
+					Default: "yes",
+				}
+				vsConfig.Persistence = append([]bigip.Persistence{}, defPersist)
+			}
+			if vs.FBPersist != "" {
+				vsConfig.FallbackPersistence = vs.FBPersist
+			}
 			vsConfig.Profiles = []bigip.Profile{}
 			httpProfile := bigip.Profile{
 				Context:   "all",
@@ -224,7 +286,9 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 				vsConfig.Pool = fmt.Sprintf("/%s/%s", globalConfig.Partition, f5PoolName(vs))
 			}
 
-			// Need to add pool members here
+			if len(vs.IRules)>0 {
+				vsConfig.Rules = vs.IRules
+			}
 
 			log.WithFields(log.Fields{
 				"name": vsConfig.Name,
@@ -624,10 +688,6 @@ func main() {
 
 	desiredJson, _ := json.MarshalIndent(desiredState, "", "  ")
 	fmt.Printf(string(desiredJson))
-
-	for _, vs := range desiredState {
-		fmt.Printf("%s\n", f5VirtualServerName(vs))
-	}
 
 	currentState, err := buildCurrentLTMState()
 	if err != nil {
