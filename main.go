@@ -134,7 +134,7 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 		Persist: "true",
 	}
 
-	description := "Managed by Kubernetes. Manual changes will be lost."
+	description := "Managed by Kubernetes. Please do not make manual changes."
 
 	for _, vs := range k8sState {
 		vsName := f5VirtualServerName(vs)
@@ -603,9 +603,11 @@ func getKubernetesState() (KubernetesState, error) {
 
 		err = fmt.Errorf("Not found")
 		for _, service = range services.Items {
-			if service.GetName() == ingress.Spec.Backend.ServiceName && service.GetNamespace() == vs.Namespace {
-				err = nil
-				break
+			if ingress.Spec.Backend.ServiceName != "" {
+				if service.GetName() == ingress.Spec.Backend.ServiceName && service.GetNamespace() == vs.Namespace {
+					err = nil
+					break
+				}
 			}
 		}
 		if err != nil {
