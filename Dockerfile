@@ -14,8 +14,8 @@ RUN cd "$GOPATH/src/github.com/mzahorik/f5-ctlr" && \
 RUN cd "$GOPATH/src/github.com/mzahorik/f5-ctlr" && \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a --ldflags='-s -w -extldflags "-static"' -o /f5-ctlr
 
-FROM busybox:1.28
+FROM scratch
 
-COPY --from=builder /f5-ctlr /bin/f5-ctlr
+COPY --from=builder /f5-ctlr /f5-ctlr
 
-ENTRYPOINT ["/bin/f5-ctlr"]
+ENTRYPOINT ["/f5-ctlr"]
