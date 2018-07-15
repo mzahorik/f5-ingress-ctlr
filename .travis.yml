@@ -12,7 +12,7 @@ env:
   - secure: K8L8XDlGdKTywRlcF/vCjNe7CWxDUdWEswVJAu1vGJslqXlHI2v553B3JHRLMRxsbE9TWFltHNTwSeSGv6+pCNmrvEEAJteuAiqlQr5pGboyLpjWgpWv/OJWXkyBIsgdJlyHSjVvFNysO+iBKZr2c4xn5Y6zEW0TWq976lP9xnGiTC6ZaCYeryjROmgm8kVNT2L+/b9XEDlyC8aIdIh9ijVZ4tcaHR75O38tLZ0AiXvHY4xnzDPdQY0fh/3Z8GJey0oZAxrlwh1BWdxvhaXLlT5IaXrXHH90rYOh7ctc3irW9tEAcIFpEhXA7Hf4LdQeHvJyDUxl6NzFw3ukiVJrhzX+a6tU0zbdwsvZrX5Exq8rj5+WwddC3zd4mXMNI3Zz0obO7w/NwTNFzf/ZSANgH2S/Z+fwVBBN//kPHE3FlXFUqKJfJM1kYjFhRPePwbI7vxcGLk9zFyvEC7eEPXJ5gjvZBrOCqCB6wS5lTy59Llk0A9JCA/mU6BFKOQ5C0mJ+OYIN7FDEquYbNntdlHRycis4FQVjhDEArN2C2pvy2xlYOvWBLn/DMsYIdgzsaEGnFTvANsz+RdW8G6aGs6z0Nji9JDM7ys7DdSkvHZTIt9XdSr9nfVfFPKkqql0BEfUobvmeLO2WamKqNhoXANmgSPV3Fotkga+AJHZeYyX/xOk=
 
 after_success:
-  - docker login -e $DOCKER_EMAIL -u $DOCKER_USER -p $DOCKER_PASS
+  - docker login -u $DOCKER_USER -p $DOCKER_PASS
   - export REPO=mzahorik/f5-ctlr
   - export TAG=`if [ "$TRAVIS_BRANCH" == "master" ]; then echo "latest"; else echo $TRAVIS_BRANCH ; fi`
   - docker build -f Dockerfile -t $REPO:$TAG .
