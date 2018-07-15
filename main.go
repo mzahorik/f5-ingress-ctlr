@@ -603,7 +603,7 @@ func getKubernetesState() (KubernetesState, error) {
 
 		err = fmt.Errorf("Not found")
 		for _, service = range services.Items {
-			if ingress.Spec.Backend.ServiceName != "" {
+			if ingress.Spec.Backend != nil {
 				if service.GetName() == ingress.Spec.Backend.ServiceName && service.GetNamespace() == vs.Namespace {
 					err = nil
 					break
