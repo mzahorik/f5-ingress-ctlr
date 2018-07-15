@@ -12,7 +12,7 @@ ADD . "$GOPATH/src/github.com/mzahorik/f5-ctlr"
 RUN cd "$GOPATH/src/github.com/mzahorik/f5-ctlr" && \
     dep ensure -v
 RUN cd "$GOPATH/src/github.com/mzahorik/f5-ctlr" && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a --ldflags='-extldflags "-static"' -o /f5-ctlr
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a --ldflags='-s -w -extldflags "-static"' -o /f5-ctlr
 
 FROM busybox:1.28
 
