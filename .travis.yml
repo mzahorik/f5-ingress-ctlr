@@ -3,10 +3,7 @@ sudo: required
 services:
   - docker
 
-language: go
-
-go:
-  - '1.10'
+language: generic
 
 env:
   global:
