@@ -189,8 +189,8 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 		}
 		if !found {
 			// Delete the monitor on the F5
-			log.Debugf(fmt.Sprintf("Remove the %s monitor %s", f5monitor.monitorType, f5monitor.FullPath))
-			err := f5.DeleteMonitor(f5monitor.FullPath, f5monitor.monitorType)
+			log.Debugf(fmt.Sprintf("Remove the %s monitor %s", f5monitor.MonitorType, f5monitor.FullPath))
+			err := f5.DeleteMonitor(f5monitor.FullPath, f5monitor.MonitorType)
 			if err != nil {
 				log.Errorf("Error removing monitor")
 			}
