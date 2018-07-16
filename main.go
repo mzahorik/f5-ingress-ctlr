@@ -634,7 +634,7 @@ func getKubernetesState() (KubernetesState, error) {
 					member.Name = pod.GetName()
 					member.IP = pod.Status.PodIP
 					if ingress.Spec.Backend != nil {
-						if ingress.Spec.Backend.ServicePort.String() != "" {
+						if ingress.Spec.Backend.ServicePort.Type == intstr.Int {
 							member.Port = int32(ingress.Spec.Backend.ServicePort.IntValue())
 						} else {
 							switch ingress.Spec.Backend.ServicePort.String() {
