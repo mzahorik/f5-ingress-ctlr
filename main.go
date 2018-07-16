@@ -26,12 +26,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mzahorik/go-bigip"
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -136,12 +138,72 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 
 	description := "Managed by Kubernetes. Please do not make manual changes."
 
+	// Delete any virtual servers that are in the F5, but no longer in Kubernetes.
+
+	for _, f5vs := range f5State.Virtuals {
+		found := false
+		for _, vs := range k8sState {
+			vsName := f5VirtualServerName(vs)
+			if f5vs.Name == vsName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			// Delete the server on the F5
+			log.Debugf(fmt.Sprintf("Remove the virtual server %s", f5vs.FullPath))
+			err := f5.DeleteVirtualServer(f5vs.FullPath)
+			if err != nil {
+				log.Errorf("Error removing virtual server")
+			}
+		}
+	}
+
+	for _, f5pool := range f5State.Pools {
+		found := false
+		for _, vs := range k8sState {
+			poolName := f5PoolName(vs)
+			if f5pool.Name == poolName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			// Delete the pool on the F5
+			log.Debugf(fmt.Sprintf("Remove the pool %s", f5pool.FullPath))
+			err := f5.DeletePool(f5pool.FullPath)
+			if err != nil {
+				log.Errorf("Error removing pool")
+			}
+		}
+	}
+
+	for _, f5monitor := range f5State.Monitors {
+		found := false
+		for _, vs := range k8sState {
+			monitorName := f5MonitorName(vs)
+			if f5monitor.Name == monitorName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			// Delete the monitor on the F5
+			log.Debugf(fmt.Sprintf("Remove the %s monitor %s", f5monitor.monitorType, f5monitor.FullPath))
+			err := f5.DeleteMonitor(f5monitor.FullPath, f5monitor.monitorType)
+			if err != nil {
+				log.Errorf("Error removing monitor")
+			}
+		}
+	}
+
 	for _, vs := range k8sState {
 		vsName := f5VirtualServerName(vs)
 		found := false
 		for _, f5vs := range f5State.Virtuals {
 			if f5vs.Name == vsName {
 				found = true
+				break
 			}
 		}
 		if !found {
@@ -421,15 +483,19 @@ func buildCurrentLTMState() (LTMState, error) {
 			"partition": monitor.Partition,
 		}).Debugf("Assessing monitor")
 		if monitor.Partition == globalConfig.Partition {
-			for _, metadata := range monitor.Metadata {
-				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
-					log.WithFields(log.Fields{
-						"name":      monitor.Name,
-						"partition": monitor.Partition,
-					}).Debugf("Monitor is in specified partition and is managed by this module")
-					cs.Monitors = append(cs.Monitors, monitor)
-					break
-				}
+			log.Debugf("Partition in monitor is correct")
+			if monitor.Description == "Managed by Kubernetes. Please do not make manual changes." {
+				//			for _, metadata := range monitor.Metadata {
+				//				log.Debugf(fmt.Sprintf("Metadata.Name is %s", metadata.Name))
+				//				log.Debugf(fmt.Sprintf("Metadata.Value is %s", metadata.Value))
+				//				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
+				log.WithFields(log.Fields{
+					"name":      monitor.Name,
+					"partition": monitor.Partition,
+				}).Debugf("Monitor is in specified partition and is managed by this module")
+				cs.Monitors = append(cs.Monitors, monitor)
+				//					break
+				//				}
 			}
 		}
 	}
@@ -707,30 +773,33 @@ func main() {
 
 	globalConfig.Partition = "k8s-auto-ny2"
 
-	desiredState, err := getKubernetesState()
-	if err != nil {
-		log.Error("Could not fetch desired state from Kubernetes")
-		log.Error(err.Error())
-		os.Exit(1)
-	}
+	for true {
+		desiredState, err := getKubernetesState()
+		if err != nil {
+			log.Error("Could not fetch desired state from Kubernetes")
+			log.Error(err.Error())
+			os.Exit(1)
+		}
 
-	desiredJson, _ := json.MarshalIndent(desiredState, "", "  ")
-	fmt.Printf(string(desiredJson))
+		//		desiredJson, _ := json.MarshalIndent(desiredState, "", "  ")
+		//		fmt.Printf(string(desiredJson))
 
-	currentState, err := buildCurrentLTMState()
-	if err != nil {
-		log.Error("Could not fetch current state from F5")
-		log.Error(err.Error())
-		os.Exit(1)
-	}
+		currentState, err := buildCurrentLTMState()
+		if err != nil {
+			log.Error("Could not fetch current state from F5")
+			log.Error(err.Error())
+			os.Exit(1)
+		}
 
-	currentJson, _ := json.MarshalIndent(currentState, "", "  ")
-	fmt.Printf(string(currentJson))
+		//		currentJson, _ := json.MarshalIndent(currentState, "", "  ")
+		//		fmt.Printf(string(currentJson))
 
-	err = applyF5Diffs(desiredState, currentState)
-	if err != nil {
-		log.Error("Could not apply Kubernetes state to F5")
-		log.Error(err.Error())
-		os.Exit(1)
+		err = applyF5Diffs(desiredState, currentState)
+		if err != nil {
+			log.Error("Could not apply Kubernetes state to F5")
+			log.Error(err.Error())
+			os.Exit(1)
+		}
+		time.Sleep(15 * time.Second)
 	}
 }
