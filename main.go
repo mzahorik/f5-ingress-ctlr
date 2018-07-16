@@ -633,7 +633,26 @@ func getKubernetesState() (KubernetesState, error) {
 				if pod.Status.Phase == "Running" {
 					member.Name = pod.GetName()
 					member.IP = pod.Status.PodIP
-					member.Port = int32(ingress.Spec.Backend.ServicePort.IntValue())
+					if ingress.Spec.Backend != nil {
+						if ingress.Spec.Backend.ServicePort.String() != "" {
+							member.Port = int32(ingress.Spec.Backend.ServicePort.IntValue())
+						} else {
+							switch ingress.Spec.Backend.ServicePort.String() {
+							case "http":
+								member.Port = 80
+							case "https":
+								member.Port = 443
+							default:
+								log.WithFields(log.Fields{
+									"ingress":   vs.Name,
+									"namespace": vs.Namespace,
+									"pod":       member.Name,
+									"ip":        member.IP,
+									"port":      ingress.Spec.Backend.ServicePort.String(),
+								}).Debugf("Unknown port type")
+							}
+						}
+					}
 					vs.Members = append(vs.Members, member)
 					log.WithFields(log.Fields{
 						"ingress":   vs.Name,
