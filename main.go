@@ -224,23 +224,27 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			// Remove the node from the associated pool
 			poolName := "/" + globalConfig.Partition + "/" + f5PoolName(vs)
 			// First check if it's in the pool, or even if the pool exists
-			log.Debugf(fmt.Sprintf("Remove the node %s from pool %s", f5node.FullPath, poolName))
+			log.Debugf(fmt.Sprintf("Remove the node %s from pool %s", f5node.Name, poolName))
 			poolMember := &bigip.PoolMember{
-				Name:      f5node.FullPath,
+				FullPath:  f5node.FullPath,
+				Name:      f5node.Name,
 				Partition: globalConfig.Partition,
 			}
 			if err := f5.RemovePoolMember(poolName,poolMember); err != nil {
 				log.Debugf(fmt.Sprintf("Member not removed from pool, this is safe to ignore"))
+				log.Debugf(err.Error())
 			}
 			// Delete the node on the F5
 			log.Debugf(fmt.Sprintf("Remove the node %s", f5node.FullPath))
 			err := f5.DeleteNode(f5node.FullPath)
 			if err != nil {
 				log.Errorf("Error removing node")
+				log.Debugf(err.Error())
 			}
 		}
 	}
 
+	var notNewVirtuals KubernetesState
 	for _, vs := range k8sState {
 		vsName := f5VirtualServerName(vs)
 		found := false
@@ -250,7 +254,9 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 				break
 			}
 		}
-		if !found {
+		if found {
+			notNewVirtuals = append(notNewVirtuals, vs)
+		} else {
 
 			monitorConfig := &bigip.Monitor{
 				Description:   description,
@@ -422,7 +428,7 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 
 	// Add in new nodes to existing pools
 
-	for _, vs := range k8sState {
+	for _, vs := range notNewVirtuals {
 		for idx, member := range vs.Members {
 			nodeName := f5NodeName(vs, idx)
 			found := false
