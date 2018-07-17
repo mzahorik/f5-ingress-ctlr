@@ -159,6 +159,8 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 		}
 	}
 
+	// Delete any pools in the F5 not in Kubernetes
+
 	for _, f5pool := range f5State.Pools {
 		found := false
 		for _, vs := range k8sState {
@@ -178,6 +180,8 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 		}
 	}
 
+	// Delete monitors
+
 	for _, f5monitor := range f5State.Monitors {
 		found := false
 		for _, vs := range k8sState {
@@ -196,6 +200,8 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			}
 		}
 	}
+
+	// Nodes
 
 	for _, f5node := range f5State.Nodes {
 		found := false
@@ -399,6 +405,63 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 		}
 
 	}
+
+	// Add in new nodes to existing pools
+
+	for _, vs := range k8sState {
+		for idx, member := range vs.Members {
+			nodeName := f5NodeName(vs, idx)
+			found := false
+			for _, f5node := range f5State.Nodes {
+				if f5node.Name == nodeName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				// Add a node, associate it with this pool's virtual server
+				nodeConfig := &bigip.Node{
+					Description: description,
+					Address:     member.IP,
+					Name:        nodeName,
+					Partition:   globalConfig.Partition,
+				}
+				nodeConfig.Metadata = append([]bigip.Metadata{}, metadata)
+				if err := f5.AddNode(nodeConfig); err != nil {
+					log.WithFields(log.Fields{
+						"node": nodeConfig.Name,
+					}).Infof("Node creation failed, proceeding without it")
+					log.Infof("Error: " + err.Error())
+					continue
+				}
+
+				poolName := f5PoolName(vs)
+				poolFullPath := "/" + globalConfig.Partition + "/" + poolName
+
+				memberName := f5PoolMemberName(vs, idx)
+				log.WithFields(log.Fields{
+					"pool": poolName,
+					"name": memberName,
+					"ip":   member.IP,
+				}).Debugf("Adding pool member")
+				memberConfig := &bigip.PoolMember{
+					Description: description,
+					Name:        memberName,
+					Partition:   globalConfig.Partition,
+				}
+				memberConfig.Metadata = append([]bigip.Metadata{}, metadata)
+				log.Debugf(fmt.Sprintf("Config: %+v", memberConfig))
+				log.Debugf(fmt.Sprintf("PoolFullPath: %s", poolFullPath))
+				if err := f5.CreatePoolMember(poolFullPath, memberConfig); err != nil {
+					log.WithFields(log.Fields{
+						"member": memberName,
+						"pool":   poolName,
+					}).Infof("Pool member creation failed, proceeding without it")
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

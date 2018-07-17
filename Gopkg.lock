@@ -158,6 +158,12 @@
 
 [[projects]]
   branch = "master"
+  name = "github.com/mzahorik/go-bigip"
+  packages = ["."]
+  revision = "c58c285ec7d1d5b6215f8cd3b45e2de616da27e4"
+
+[[projects]]
+  branch = "master"
   name = "github.com/petar/GoLLRB"
   packages = ["llrb"]
   revision = "53be0d36a84c2a886ca057d34b6aa4468df9ccb4"
@@ -167,12 +173,6 @@
   packages = ["."]
   revision = "5f041e8faa004a95c88a202771f4cc3e991971e6"
   version = "v2.0.1"
-
-[[projects]]
-  branch = "master"
-  name = "github.com/scottdware/go-bigip"
-  packages = ["."]
-  revision = "fb6f8eaea1326164f3f57a7fa6f0d9f1ea91bbbd"
 
 [[projects]]
   name = "github.com/sirupsen/logrus"
@@ -193,15 +193,14 @@
   revision = "a49355c7e3f8fe157a85be2f77e6e269a0f89602"
 
 [[projects]]
-  branch = "master"
+  branch = "release-branch.go1.6"
   name = "golang.org/x/net"
   packages = [
-    "http/httpguts",
     "http2",
     "http2/hpack",
     "idna"
   ]
-  revision = "afe8f62b1d6bbd81f31868121a50b06d8188e1f9"
+  revision = "62685c2d7ca23c807425dca88b11a3e2323dab41"
 
 [[projects]]
   branch = "master"
@@ -215,20 +214,12 @@
 [[projects]]
   name = "golang.org/x/text"
   packages = [
-    "collate",
-    "collate/build",
-    "internal/colltab",
     "internal/gen",
-    "internal/tag",
     "internal/triegen",
     "internal/ucd",
-    "language",
-    "secure/bidirule",
     "transform",
-    "unicode/bidi",
     "unicode/cldr",
     "unicode/norm",
-    "unicode/rangetable",
     "width"
   ]
   revision = "f21a4dfb5e38f5895301dc265a8def02365cc3d0"
@@ -385,6 +376,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "50c45dbd83826ae34f58b698e70869eb412534944859615e7a6137d19bdb2332"
+  inputs-digest = "028db234c24a9af63a8397c6f4d2c0614ae34c6af74b6342a20a59b9a84d9a21"
   solver-name = "gps-cdcl"
   solver-version = 1
