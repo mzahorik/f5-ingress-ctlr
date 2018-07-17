@@ -205,7 +205,9 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 
 	for _, f5node := range f5State.Nodes {
 		found := false
-		for _, vs := range k8sState {
+		var vs KsVirtualServer
+
+		for _, vs = range k8sState {
 			for idx, _ := range vs.Members {
 				nodeName := f5NodeName(vs, idx)
 				if f5node.Name == nodeName {
@@ -218,6 +220,18 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			}
 		}
 		if !found {
+
+			// Remove the node from the associated pool
+			poolName := "/" + globalConfig.Partition + "/" + f5PoolName(vs)
+			// First check if it's in the pool, or even if the pool exists
+			log.Debugf(fmt.Sprintf("Remove the node %s from pool %s", f5node.FullPath, poolName))
+			poolMember := &bigip.PoolMember{
+				Name:      f5node.FullPath,
+				Partition: globalConfig.Partition,
+			}
+			if err := f5.RemovePoolMember(poolName,poolMember); err != nil {
+				log.Debugf(fmt.Sprintf("Member not removed from pool, this is safe to ignore"))
+			}
 			// Delete the node on the F5
 			log.Debugf(fmt.Sprintf("Remove the node %s", f5node.FullPath))
 			err := f5.DeleteNode(f5node.FullPath)
