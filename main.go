@@ -431,25 +431,25 @@ func buildCurrentLTMState() (LTMState, error) {
 
 	log.Debugf("Connected to F5")
 
-	virtualServers, err := f5.VirtualServers()
+	virtualServers, err := f5.VirtualServersForPartition(globalConfig.Partition)
 	if err != nil {
 		log.Debugf("Failed to retrieve F5 virtual server information")
 		return cs, err
 	}
 
-	pools, err := f5.Pools()
+	pools, err := f5.PoolsForPartition(globalConfig.Partition)
 	if err != nil {
 		log.Debugf("Failed to retrieve F5 pool information")
 		return cs, err
 	}
 
-	monitors, err := f5.Monitors()
+	monitors, err := f5.MonitorsForPartition(globalConfig.Partition)
 	if err != nil {
 		log.Debugf("Failed to retrieve F5 monitor information")
 		return cs, err
 	}
 
-	nodes, err := f5.Nodes()
+	nodes, err := f5.NodesForPartition(globalConfig.Partition)
 	if err != nil {
 		log.Debugf("Failed to retrieve F5 node information")
 		return cs, err
