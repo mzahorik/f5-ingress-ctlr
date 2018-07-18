@@ -11,9 +11,11 @@ env:
   - secure: cfR+C+GAi7Qo9+toHiTIN9bS9zHJMkwgYngBNG40rpEWxwDC8Bq4gzK+igK/UlCPeVt624eItPHXVqxiWZZ8M0ZvXlwl/gpSUeFJ1n0G+1eGfu98G9SsGEu3DelYwvTKczfOH00uO1+hcUGn0S4Ce68A5Ngx73xISAoWOVZcYLfoWxgW7hGcfCp5YpQYA/WHedCbuhWUy9PoMPCrpE3dRkNJlVE6qvQ0ruCFfsfHDL7AgHFvu5dzUsBp2st9Q+rmoG2Wh4U3FsdgrUvRgOXR/y07+4QogS+MbczGtScfjMadX4qKAj5Pz+BkrUvyEqtzqgPmMaAc3PLbQ2xSqmIARHnQSlZYBF9lDnZ2LO63I6dLntKyNmyObxth1SBdyPeSR5lOvdrebtByxTxLvI0uitbhTYVPXDa78l9ri++PukCMbTfWQBdbWY5VVAsdBAtYBk9Jpm8jWS/dix5N1aoIxgNYVbByFwpo1Vj1bTimEstZaS/LtWBokXP6PC5CN5sG+ihEeswq7E8z09E96Ov/GUY1OscLnIKPIkrJNwWW/OsaMALtGEHp0gwhdFZuKNnS7T6JWT5TkIH5lCUzDMz99U7Frw1eGAfKirPC2F98ofJdczgn4EywzlLhISYDHhvGPURDr1x14O/LomsrjdKkK6Lwm+PhHL/Xq1lUoes14Qo=
   - secure: K8L8XDlGdKTywRlcF/vCjNe7CWxDUdWEswVJAu1vGJslqXlHI2v553B3JHRLMRxsbE9TWFltHNTwSeSGv6+pCNmrvEEAJteuAiqlQr5pGboyLpjWgpWv/OJWXkyBIsgdJlyHSjVvFNysO+iBKZr2c4xn5Y6zEW0TWq976lP9xnGiTC6ZaCYeryjROmgm8kVNT2L+/b9XEDlyC8aIdIh9ijVZ4tcaHR75O38tLZ0AiXvHY4xnzDPdQY0fh/3Z8GJey0oZAxrlwh1BWdxvhaXLlT5IaXrXHH90rYOh7ctc3irW9tEAcIFpEhXA7Hf4LdQeHvJyDUxl6NzFw3ukiVJrhzX+a6tU0zbdwsvZrX5Exq8rj5+WwddC3zd4mXMNI3Zz0obO7w/NwTNFzf/ZSANgH2S/Z+fwVBBN//kPHE3FlXFUqKJfJM1kYjFhRPePwbI7vxcGLk9zFyvEC7eEPXJ5gjvZBrOCqCB6wS5lTy59Llk0A9JCA/mU6BFKOQ5C0mJ+OYIN7FDEquYbNntdlHRycis4FQVjhDEArN2C2pvy2xlYOvWBLn/DMsYIdgzsaEGnFTvANsz+RdW8G6aGs6z0Nji9JDM7ys7DdSkvHZTIt9XdSr9nfVfFPKkqql0BEfUobvmeLO2WamKqNhoXANmgSPV3Fotkga+AJHZeYyX/xOk=
 
-after_success:
-  - docker login -u $DOCKER_USER -p $DOCKER_PASS
+script:
   - export REPO=mzahorik/f5-ctlr
   - export TAG=`if [ "$TRAVIS_BRANCH" == "master" ]; then echo "latest"; else echo $TRAVIS_BRANCH ; fi`
-  - docker build -f Dockerfile -t $REPO:$TAG .
+  - docker build -f Dockerfile -t $REPO:$TAG
+
+after_success:
+  - docker login -u $DOCKER_USER -p $DOCKER_PASS
   - docker push $REPO:$TAG

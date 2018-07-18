@@ -45,7 +45,7 @@ var globalConfig struct {
 	Partition string
 }
 
-type LTMState struct {
+var f5State struct {
 	Virtuals []bigip.VirtualServer `json:"virtuals",omitempty`
 	Pools    []bigip.Pool          `json:"pools",omitempty`
 	Monitors []bigip.Monitor       `json:"monitors",omitempty`
@@ -126,7 +126,222 @@ func f5NodeName(vs KsVirtualServer, memberIndex int) string {
 
 var f5 *bigip.BigIP
 
-func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
+/*
+** deleteMonitor
+**
+** Takes an index into the f5State.Monitors slice, and deletes that monitor
+** off the F5. If successful, it is removed from the f5State.Monitors slice.
+**
+** Prior to deleting the monitor, all pools in our partition are scanned
+** to see if there's an association with the monitor, and if so, the
+** monitor is removed from the pool before deleting the monitor.
+**
+** If anything went wrong, the error is returned to the caller to handle.
+ */
+
+func deleteMonitor(index int) error {
+
+	monitor := f5State.Monitors[index]
+
+	for _, pool := range f5State.Pools {
+
+		if pool.Monitor == monitor.FullPath {
+
+			log.WithFields(log.Fields{
+				"monitor": monitor.Name,
+				"pool":    pool.Name,
+				"thread":  "F5",
+			}).Infof("Removing monitor from pool. ****TODO****")
+		}
+	}
+
+	// Call the F5 to delete it
+
+	log.WithFields(log.Fields{
+		"monitor": monitor.Name,
+		"thread":  "F5",
+	}).Infof("Removing monitor.")
+
+	if err := f5.DeleteMonitor(monitor.FullPath, monitor.MonitorType); err != nil {
+		return err
+	}
+
+	// Remove it from the list of virtuals in the F5 state
+
+	f5State.Monitors = append(f5State.Monitors[:index], f5State.Monitors[index+1:]...)
+
+	return nil
+}
+
+/*
+** deleteNode
+**
+** Takes an index into the f5State.Nodes slice, and deletes that node off the F5.
+** If successful, it is removed from the f5State.Nodes slice.
+**
+** Prior to deleting the node, all pool members in our partition are scanned
+** to see if there's an association with the node, and if so, the pool member
+** is removed from the pool before deleting the node.
+**
+** If anything went wrong, the error is returned to the caller to handle.
+ */
+
+func deleteNode(index int) error {
+
+	node := f5State.Nodes[index]
+
+	for _, pool := range f5State.Pools {
+
+		if pool.Members != nil {
+			log.Debugf(fmt.Sprintf("pool.Members: %+v", pool.Members))
+		}
+
+		poolMembers, err := f5.PoolMembers(pool.FullPath)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"error":  err.Error(),
+				"pool":   pool.Name,
+				"thread": "F5",
+			}).Debugf("Failed to get pool members.")
+			continue
+		}
+
+		for _, poolMember := range poolMembers.PoolMembers {
+			splitString := strings.Split(poolMember.FullPath, ":")
+			if len(splitString) < 2 {
+				continue
+			}
+			if splitString[0] == node.FullPath {
+				poolMemberConfig := &bigip.PoolMember{
+					FullPath:  poolMember.FullPath,
+					Name:      poolMember.Name,
+					Partition: globalConfig.Partition,
+				}
+				log.WithFields(log.Fields{
+					"pool":   pool.Name,
+					"member": poolMember.Name,
+					"thread": "F5",
+				}).Infof("Removing pool member from pool.")
+				if err := f5.RemovePoolMember(pool.FullPath, poolMemberConfig); err != nil {
+					log.WithFields(log.Fields{
+						"error":  err.Error(),
+						"member": poolMember.Name,
+						"pool":   pool.Name,
+						"thread": "F5",
+					}).Debugf("Failed to remove pool member.")
+				}
+				// ****TODO**** If pool.Members exist, remove it here to keep state up to date
+			}
+		}
+	}
+
+	// Call the F5 to delete it
+
+	log.WithFields(log.Fields{
+		"node":   node.Name,
+		"thread": "F5",
+	}).Infof("Removing node.")
+
+	if err := f5.DeleteNode(node.FullPath); err != nil {
+		return err
+	}
+
+	// Remove it from the list of nodes in the F5 state
+
+	log.Debugf("f5State.Nodes before:")
+	for _, node := range f5State.Nodes {
+		log.Debugf(fmt.Sprintf("   %s", node.Name))
+	}
+	f5State.Nodes = append(f5State.Nodes[:index], f5State.Nodes[index+1:]...)
+	log.Debugf("f5State.Nodes after:")
+	for _, node := range f5State.Nodes {
+		log.Debugf(fmt.Sprintf("   %s", node.Name))
+	}
+
+	return nil
+}
+
+/*
+** deletePool
+**
+** Takes an index into the f5State.Pools slice, and deletes that pool off the F5.
+** If successful, it is removed from the f5State.Pools slice.
+**
+** Prior to deleting the pool, all virtual servers in our partition are scanned
+** to see if there's an association with the pool, and if so, the pool is
+** removed from the virtual server before deleting the pool.
+**
+** If anything went wrong, the error is returned to the caller to handle.
+ */
+
+func deletePool(index int) error {
+
+	pool := f5State.Pools[index]
+
+	for _, vs := range f5State.Virtuals {
+
+		if vs.Pool == pool.FullPath {
+
+			log.WithFields(log.Fields{
+				"pool":   pool.Name,
+				"thread": "F5",
+				"vs":     vs.Name,
+			}).Infof("Removing pool from virtual server. ****TODO****")
+		}
+	}
+
+	// Call the F5 to delete it
+
+	log.WithFields(log.Fields{
+		"pool":   pool.Name,
+		"thread": "F5",
+	}).Infof("Removing pool.")
+
+	if err := f5.DeletePool(pool.FullPath); err != nil {
+		return err
+	}
+
+	// Remove it from the list of pools in the F5 state
+
+	f5State.Pools = append(f5State.Pools[:index], f5State.Pools[index+1:]...)
+
+	return nil
+}
+
+/*
+** deleteVirtualServer
+**
+** Takes an index into the f5State.Virtuals slice, and deletes that virtual server
+** off the F5.  If successful, it is also removed from the f5State.Virtuals slice.
+**
+** If anything went wrong, the error is returned to the caller to handle.
+ */
+
+func deleteVirtualServer(index int) error {
+
+	// Get the virtual server
+
+	vs := f5State.Virtuals[index]
+
+	// Call the F5 to delete it
+
+	log.WithFields(log.Fields{
+		"thread": "F5",
+		"vs":     vs.Name,
+	}).Infof("Removing virtual server.")
+
+	if err := f5.DeleteVirtualServer(vs.FullPath); err != nil {
+		return err
+	}
+
+	// Remove it from the list of virtuals in the F5 state
+
+	f5State.Virtuals = append(f5State.Virtuals[:index], f5State.Virtuals[index+1:]...)
+
+	return nil
+}
+
+func applyF5Diffs(k8sState KubernetesState) error {
 
 	// Step through virtual servers, creating as necessary
 
@@ -140,7 +355,7 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 
 	// Delete any virtual servers that are in the F5, but no longer in Kubernetes.
 
-	for _, f5vs := range f5State.Virtuals {
+	for idx, f5vs := range f5State.Virtuals {
 		found := false
 		for _, vs := range k8sState {
 			vsName := f5VirtualServerName(vs)
@@ -150,18 +365,15 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			}
 		}
 		if !found {
-			// Delete the server on the F5
-			log.Debugf(fmt.Sprintf("Remove the virtual server %s", f5vs.FullPath))
-			err := f5.DeleteVirtualServer(f5vs.FullPath)
-			if err != nil {
-				log.Errorf("Error removing virtual server")
+			if err := deleteVirtualServer(idx); err != nil {
+				log.Errorf(err.Error())
 			}
 		}
 	}
 
 	// Delete any pools in the F5 not in Kubernetes
 
-	for _, f5pool := range f5State.Pools {
+	for idx, f5pool := range f5State.Pools {
 		found := false
 		for _, vs := range k8sState {
 			poolName := f5PoolName(vs)
@@ -171,18 +383,15 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			}
 		}
 		if !found {
-			// Delete the pool on the F5
-			log.Debugf(fmt.Sprintf("Remove the pool %s", f5pool.FullPath))
-			err := f5.DeletePool(f5pool.FullPath)
-			if err != nil {
-				log.Errorf("Error removing pool")
+			if err := deletePool(idx); err != nil {
+				log.Errorf(err.Error())
 			}
 		}
 	}
 
 	// Delete monitors
 
-	for _, f5monitor := range f5State.Monitors {
+	for idx, f5monitor := range f5State.Monitors {
 		found := false
 		for _, vs := range k8sState {
 			monitorName := f5MonitorName(vs)
@@ -192,24 +401,20 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			}
 		}
 		if !found {
-			// Delete the monitor on the F5
-			log.Debugf(fmt.Sprintf("Remove the %s monitor %s", f5monitor.MonitorType, f5monitor.FullPath))
-			err := f5.DeleteMonitor(f5monitor.FullPath, f5monitor.MonitorType)
-			if err != nil {
-				log.Errorf("Error removing monitor")
+			if err := deleteMonitor(idx); err != nil {
+				log.Errorf(err.Error())
 			}
 		}
 	}
 
 	// Nodes
 
-	for _, f5node := range f5State.Nodes {
+	for idx, f5node := range f5State.Nodes {
 		found := false
-		var vs KsVirtualServer
-
-		for _, vs = range k8sState {
-			for idx, _ := range vs.Members {
-				nodeName := f5NodeName(vs, idx)
+		log.Debugf(fmt.Sprintf("Assessing node %s for deletion",f5node.Name))
+		for _, vs := range k8sState {
+			for mIdx, _ := range vs.Members {
+				nodeName := f5NodeName(vs, mIdx)
 				if f5node.Name == nodeName {
 					found = true
 					break
@@ -220,26 +425,9 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 			}
 		}
 		if !found {
-
-			// Remove the node from the associated pool
-			poolName := "/" + globalConfig.Partition + "/" + f5PoolName(vs)
-			// First check if it's in the pool, or even if the pool exists
-			log.Debugf(fmt.Sprintf("Remove the node %s from pool %s", f5node.Name, poolName))
-			poolMember := &bigip.PoolMember{
-				FullPath:  f5node.FullPath,
-				Name:      f5node.Name,
-				Partition: globalConfig.Partition,
-			}
-			if err := f5.RemovePoolMember(poolName,poolMember); err != nil {
-				log.Debugf(fmt.Sprintf("Member not removed from pool, this is safe to ignore"))
-				log.Debugf(err.Error())
-			}
-			// Delete the node on the F5
-			log.Debugf(fmt.Sprintf("Remove the node %s", f5node.FullPath))
-			err := f5.DeleteNode(f5node.FullPath)
-			if err != nil {
-				log.Errorf("Error removing node")
-				log.Debugf(err.Error())
+			log.Debugf(fmt.Sprintf("Calling delete for node %s",f5node.Name))
+			if err := deleteNode(idx); err != nil {
+				log.Errorf(err.Error())
 			}
 		}
 	}
@@ -485,57 +673,55 @@ func applyF5Diffs(k8sState KubernetesState, f5State LTMState) error {
 	return nil
 }
 
-func buildCurrentLTMState() (LTMState, error) {
-
-	var cs LTMState
+func buildCurrentLTMState() error {
 
 	var f5_user, f5_password, f5_host string
 
 	var err error
 
 	if f5_user = os.Getenv("F5_USER"); f5_user == "" {
-		return cs, fmt.Errorf("F5_USER environment variable must be set")
+		return fmt.Errorf("F5_USER environment variable must be set")
 	}
 
 	if f5_password = os.Getenv("F5_PASSWORD"); f5_password == "" {
-		return cs, fmt.Errorf("F5_PASSWORD environment variable must be set")
+		return fmt.Errorf("F5_PASSWORD environment variable must be set")
 	}
 
 	if f5_host = os.Getenv("F5_HOST"); f5_host == "" {
-		return cs, fmt.Errorf("F5_HOST environment variable must be set")
+		return fmt.Errorf("F5_HOST environment variable must be set")
 	}
 
 	f5, err = bigip.NewTokenSession(f5_host, f5_user, f5_password, "tmos", &bigip.ConfigOptions{})
 
 	if err != nil {
 		log.Debugf("Failed to get token")
-		return cs, err
+		return err
 	}
 
-	log.Debugf("Connected to F5")
+	log.Debugf("Connected to F5.")
 
 	virtualServers, err := f5.VirtualServersForPartition(globalConfig.Partition)
 	if err != nil {
 		log.Debugf("Failed to retrieve F5 virtual server information")
-		return cs, err
+		return err
 	}
 
 	pools, err := f5.PoolsForPartition(globalConfig.Partition)
 	if err != nil {
 		log.Debugf("Failed to retrieve F5 pool information")
-		return cs, err
+		return err
 	}
 
 	monitors, err := f5.MonitorsForPartition(globalConfig.Partition)
 	if err != nil {
 		log.Debugf("Failed to retrieve F5 monitor information")
-		return cs, err
+		return err
 	}
 
 	nodes, err := f5.NodesForPartition(globalConfig.Partition)
 	if err != nil {
 		log.Debugf("Failed to retrieve F5 node information")
-		return cs, err
+		return err
 	}
 
 	// Clean the virtual server list - only copy over virtual server
@@ -543,18 +729,14 @@ func buildCurrentLTMState() (LTMState, error) {
 	// metadata entry of "f5-ingress-ctlr-managed" set to "true"
 
 	for _, virtualServer := range virtualServers.VirtualServers {
-		log.WithFields(log.Fields{
-			"name":      virtualServer.Name,
-			"partition": virtualServer.Partition,
-		}).Debugf("Assessing virtual server")
 		if virtualServer.Partition == globalConfig.Partition {
 			for _, metadata := range virtualServer.Metadata {
 				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
 					log.WithFields(log.Fields{
-						"name":      virtualServer.Name,
-						"partition": virtualServer.Partition,
-					}).Debugf("Virtual server is in specified partition and is managed by this module")
-					cs.Virtuals = append(cs.Virtuals, virtualServer)
+						"thread": "F5",
+						"vs": virtualServer.Name,
+					}).Debugf("Virtual server found.")
+					f5State.Virtuals = append(f5State.Virtuals, virtualServer)
 					break
 				}
 			}
@@ -564,18 +746,14 @@ func buildCurrentLTMState() (LTMState, error) {
 	// Same with pools
 
 	for _, pool := range pools.Pools {
-		log.WithFields(log.Fields{
-			"name":      pool.Name,
-			"partition": pool.Partition,
-		}).Debugf("Assessing pool")
 		if pool.Partition == globalConfig.Partition {
 			for _, metadata := range pool.Metadata {
 				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
 					log.WithFields(log.Fields{
-						"name":      pool.Name,
-						"partition": pool.Partition,
-					}).Debugf("Pool is in specified partition and is managed by this module")
-					cs.Pools = append(cs.Pools, pool)
+						"pool":   pool.Name,
+						"thread": "F5",
+					}).Debugf("Pool found.")
+					f5State.Pools = append(f5State.Pools, pool)
 					break
 				}
 			}
@@ -585,22 +763,20 @@ func buildCurrentLTMState() (LTMState, error) {
 	// Same with monitors
 
 	for _, monitor := range monitors {
-		log.WithFields(log.Fields{
-			"name":      monitor.Name,
-			"partition": monitor.Partition,
-		}).Debugf("Assessing monitor")
 		if monitor.Partition == globalConfig.Partition {
-			log.Debugf("Partition in monitor is correct")
+
+			// This is a temporary workaround, the metadata field doesn't translate
+			// through from the F5 Go library, so we rely upon the Description for now
+
+			//			for _, metadata := range monitor.Metadata {
+			//				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
+
 			if monitor.Description == "Managed by Kubernetes. Please do not make manual changes." {
-				//			for _, metadata := range monitor.Metadata {
-				//				log.Debugf(fmt.Sprintf("Metadata.Name is %s", metadata.Name))
-				//				log.Debugf(fmt.Sprintf("Metadata.Value is %s", metadata.Value))
-				//				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
 				log.WithFields(log.Fields{
-					"name":      monitor.Name,
-					"partition": monitor.Partition,
-				}).Debugf("Monitor is in specified partition and is managed by this module")
-				cs.Monitors = append(cs.Monitors, monitor)
+					"monitor": monitor.Name,
+					"thread":  "F5",
+				}).Debugf("Monitor found.")
+				f5State.Monitors = append(f5State.Monitors, monitor)
 				//					break
 				//				}
 			}
@@ -610,25 +786,21 @@ func buildCurrentLTMState() (LTMState, error) {
 	// Finally, same with nodes
 
 	for _, node := range nodes.Nodes {
-		log.WithFields(log.Fields{
-			"name":      node.Name,
-			"partition": node.Partition,
-		}).Debugf("Assessing node")
 		if node.Partition == globalConfig.Partition {
 			for _, metadata := range node.Metadata {
 				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
 					log.WithFields(log.Fields{
-						"name":      node.Name,
-						"partition": node.Partition,
-					}).Debugf("Node is in specified partition and is managed by this module")
-					cs.Nodes = append(cs.Nodes, node)
+						"node":   node.Name,
+						"thread": "F5",
+					}).Debugf("Node found.")
+					f5State.Nodes = append(f5State.Nodes, node)
 					break
 				}
 			}
 		}
 	}
 
-	return cs, nil
+	return nil
 }
 
 type KsVSMonitorAttributes struct {
@@ -865,8 +1037,15 @@ func getKubernetesState() (KubernetesState, error) {
 	return ks, nil
 }
 
+var version string
+
 func main() {
 
+	// Say Hello!
+
+	log.WithFields(log.Fields{
+		"version": version,
+	}).Infof("F5-ingress-ctlr starting")
 	// initialize the Kubernetes connection
 
 	log.SetLevel(log.DebugLevel)
@@ -880,7 +1059,23 @@ func main() {
 
 	globalConfig.Partition = "k8s-auto-ny2"
 
+	// clear F5 LTM state
+
 	for true {
+
+		f5State.Virtuals = []bigip.VirtualServer{}
+		f5State.Pools = []bigip.Pool{}
+		f5State.Monitors = []bigip.Monitor{}
+		f5State.Nodes = []bigip.Node{}
+
+		err = buildCurrentLTMState()
+		if err != nil {
+			log.Errorf("Could not fetch current state from F5")
+			log.Errorf(err.Error())
+			os.Exit(1)
+		}
+
+		//	for true {
 		desiredState, err := getKubernetesState()
 		if err != nil {
 			log.Error("Could not fetch desired state from Kubernetes")
@@ -888,20 +1083,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		//		desiredJson, _ := json.MarshalIndent(desiredState, "", "  ")
-		//		fmt.Printf(string(desiredJson))
-
-		currentState, err := buildCurrentLTMState()
-		if err != nil {
-			log.Error("Could not fetch current state from F5")
-			log.Error(err.Error())
-			os.Exit(1)
-		}
-
-		//		currentJson, _ := json.MarshalIndent(currentState, "", "  ")
-		//		fmt.Printf(string(currentJson))
-
-		err = applyF5Diffs(desiredState, currentState)
+		err = applyF5Diffs(desiredState)
 		if err != nil {
 			log.Error("Could not apply Kubernetes state to F5")
 			log.Error(err.Error())
