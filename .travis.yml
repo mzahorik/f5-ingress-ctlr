@@ -14,7 +14,7 @@ env:
 script:
   - export REPO=mzahorik/f5-ctlr
   - export TAG=`if [ "$TRAVIS_BRANCH" == "master" ]; then echo "latest"; else echo $TRAVIS_BRANCH ; fi`
-  - docker build -f Dockerfile -t $REPO:$TAG
+  - docker build -f Dockerfile -t $REPO:$TAG .
 
 after_success:
   - docker login -u $DOCKER_USER -p $DOCKER_PASS
