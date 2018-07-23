@@ -176,86 +176,100 @@ func deleteMonitor(index int) error {
 /*
 ** deleteNode
 **
-** Takes an index into the f5State.Nodes slice, and deletes that node off the F5.
-** If successful, it is removed from the f5State.Nodes slice.
+** Takes a bigip.Node structure, and deletes that node off the F5.
+** If successful, it is removed from the f5State.Nodes cache.
 **
 ** Prior to deleting the node, all pool members in our partition are scanned
 ** to see if there's an association with the node, and if so, the pool member
 ** is removed from the pool before deleting the node.
 **
 ** If anything went wrong, the error is returned to the caller to handle.
- */
+*/
 
-func deleteNode(index int) error {
+func deleteNode(node bigip.Node) error {
 
-	node := f5State.Nodes[index]
+	// Walk the list of pools
 
 	for _, pool := range f5State.Pools {
 
 		if pool.Members != nil {
-			log.Debugf(fmt.Sprintf("pool.Members: %+v", pool.Members))
-		}
 
-		poolMembers, err := f5.PoolMembers(pool.FullPath)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"error":  err.Error(),
-				"pool":   pool.Name,
-				"thread": "F5",
-			}).Debugf("Failed to get pool members.")
-			continue
-		}
+			// If there are pool members in the pool, walk that list
+			// to see if any match the node we're looking to remove
 
-		for _, poolMember := range poolMembers.PoolMembers {
-			splitString := strings.Split(poolMember.FullPath, ":")
-			if len(splitString) < 2 {
-				continue
-			}
-			if splitString[0] == node.FullPath {
-				poolMemberConfig := &bigip.PoolMember{
-					FullPath:  poolMember.FullPath,
-					Name:      poolMember.Name,
-					Partition: globalConfig.Partition,
-				}
-				log.WithFields(log.Fields{
-					"pool":   pool.Name,
-					"member": poolMember.Name,
-					"thread": "F5",
-				}).Infof("Removing pool member from pool.")
-				if err := f5.RemovePoolMember(pool.FullPath, poolMemberConfig); err != nil {
+			for _, poolMember := range *pool.Members {
+
+				// The node name in a pool is <node>:<port>, strip
+				// off the port.  We skip entries that don't match
+				// this pattern.
+
+				splitString := strings.Split(poolMember.FullPath, ":")
+				if len(splitString) < 2 {
 					log.WithFields(log.Fields{
-						"error":  err.Error(),
+						"pool":   pool.Name,
+						"member": poolMember.FullPath,
+						"thread": "F5",
+					}).Debugf("Pool member isn't in the form of <node>:<port>. Skipping it")
+					continue
+				}
+
+				if splitString[0] == node.FullPath {
+					poolMemberConfig := &bigip.PoolMember{
+						FullPath:  poolMember.FullPath,
+						Name:      poolMember.Name,
+						Partition: globalConfig.Partition,
+					}
+					log.WithFields(log.Fields{
+						"pool":   pool.Name,
+						"member": poolMember.Name,
+						"thread": "F5",
+					}).Infof("Removing pool member from F5")
+					if err := f5.RemovePoolMember(pool.FullPath, poolMemberConfig); err != nil {
+						return err
+					}
+
+					log.WithFields(log.Fields{
 						"member": poolMember.Name,
 						"pool":   pool.Name,
 						"thread": "F5",
-					}).Debugf("Failed to remove pool member.")
+					}).Debugf("Removing pool member from state cache")
+					newPoolMembers := []bigip.PoolMember{}
+					for _, pm := range *pool.Members {
+						if pm.FullPath != poolMember.FullPath {
+							newPoolMembers = append(newPoolMembers, pm)
+						}
+					}
+
+					pool.Members = &newPoolMembers
+					break		// Don't scan the remaining pool members
 				}
-				// ****TODO**** If pool.Members exist, remove it here to keep state up to date
 			}
 		}
 	}
 
-	// Call the F5 to delete it
+	// Call the F5 to delete the node
 
 	log.WithFields(log.Fields{
 		"node":   node.Name,
 		"thread": "F5",
-	}).Infof("Removing node.")
+	}).Infof("Removing node from F5")
 
 	if err := f5.DeleteNode(node.FullPath); err != nil {
 		return err
 	}
 
-	// Remove it from the list of nodes in the F5 state
+	// Remove it from the list of nodes in the F5 state cache
 
-	log.Debugf("f5State.Nodes before:")
-	for _, node := range f5State.Nodes {
-		log.Debugf(fmt.Sprintf("   %s", node.Name))
-	}
-	f5State.Nodes = append(f5State.Nodes[:index], f5State.Nodes[index+1:]...)
-	log.Debugf("f5State.Nodes after:")
-	for _, node := range f5State.Nodes {
-		log.Debugf(fmt.Sprintf("   %s", node.Name))
+	log.WithFields(log.Fields{
+		"node":   node.Name,
+		"thread": "F5",
+	}).Debugf("Removing node from state cache")
+
+	for idx, stateNode := range f5State.Nodes {
+		if node.FullPath == stateNode.FullPath {
+			f5State.Nodes = append(f5State.Nodes[:idx], f5State.Nodes[idx+1:]...)
+			break
+		}
 	}
 
 	return nil
@@ -409,12 +423,13 @@ func applyF5Diffs(k8sState KubernetesState) error {
 
 	// Nodes
 
-	for idx, f5node := range f5State.Nodes {
+	f5Nodes := make([]bigip.Node, len(f5State.Nodes))
+	copy(f5Nodes, f5State.Nodes)
+	for _, f5node := range f5Nodes {
 		found := false
-		log.Debugf(fmt.Sprintf("Assessing node %s for deletion",f5node.Name))
 		for _, vs := range k8sState {
-			for mIdx, _ := range vs.Members {
-				nodeName := f5NodeName(vs, mIdx)
+			for idx, _ := range vs.Members {
+				nodeName := f5NodeName(vs, idx)
 				if f5node.Name == nodeName {
 					found = true
 					break
@@ -425,8 +440,7 @@ func applyF5Diffs(k8sState KubernetesState) error {
 			}
 		}
 		if !found {
-			log.Debugf(fmt.Sprintf("Calling delete for node %s",f5node.Name))
-			if err := deleteNode(idx); err != nil {
+			if err := deleteNode(f5node); err != nil {
 				log.Errorf(err.Error())
 			}
 		}
@@ -698,7 +712,7 @@ func buildCurrentLTMState() error {
 		return err
 	}
 
-	log.Debugf("Connected to F5.")
+	log.Debugf("Connected to F5")
 
 	virtualServers, err := f5.VirtualServersForPartition(globalConfig.Partition)
 	if err != nil {
@@ -735,7 +749,7 @@ func buildCurrentLTMState() error {
 					log.WithFields(log.Fields{
 						"thread": "F5",
 						"vs": virtualServer.Name,
-					}).Debugf("Virtual server found.")
+					}).Debugf("Adding virtual server to state cache")
 					f5State.Virtuals = append(f5State.Virtuals, virtualServer)
 					break
 				}
@@ -749,10 +763,27 @@ func buildCurrentLTMState() error {
 		if pool.Partition == globalConfig.Partition {
 			for _, metadata := range pool.Metadata {
 				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
+					poolMembers, err := f5.PoolMembers(pool.FullPath)
+					if err != nil {
+						log.WithFields(log.Fields{
+							"error":  err.Error(),
+							"pool":   pool.Name,
+							"thread": "F5",
+						}).Debugf("Failed to fetch pool members")
+					} else {
+						for _, pm := range poolMembers.PoolMembers {
+							log.WithFields(log.Fields{
+								"pool":       pool.Name,
+								"poolMember": pm.Name,
+								"thread":     "F5",
+							}).Debugf("Adding pool member to state cache")
+						}
+						pool.Members = &poolMembers.PoolMembers
+					}
 					log.WithFields(log.Fields{
 						"pool":   pool.Name,
 						"thread": "F5",
-					}).Debugf("Pool found.")
+					}).Debugf("Adding pool to state cache")
 					f5State.Pools = append(f5State.Pools, pool)
 					break
 				}
@@ -775,7 +806,7 @@ func buildCurrentLTMState() error {
 				log.WithFields(log.Fields{
 					"monitor": monitor.Name,
 					"thread":  "F5",
-				}).Debugf("Monitor found.")
+				}).Debugf("Adding monitor to state cache")
 				f5State.Monitors = append(f5State.Monitors, monitor)
 				//					break
 				//				}
@@ -792,7 +823,7 @@ func buildCurrentLTMState() error {
 					log.WithFields(log.Fields{
 						"node":   node.Name,
 						"thread": "F5",
-					}).Debugf("Node found.")
+					}).Debugf("Adding node to state cache")
 					f5State.Nodes = append(f5State.Nodes, node)
 					break
 				}
