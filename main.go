@@ -184,17 +184,17 @@ func deleteMonitor(index int) error {
 ** is removed from the pool before deleting the node.
 **
 ** If anything went wrong, the error is returned to the caller to handle.
-*/
+ */
 
 func deleteNode(node bigip.Node) error {
 
-	// Walk the list of pools
+	// Walk the array of pools
 
 	for _, pool := range f5State.Pools {
 
 		if pool.Members != nil {
 
-			// If there are pool members in the pool, walk that list
+			// If there are pool members in the pool, walk that array
 			// to see if any match the node we're looking to remove
 
 			for _, poolMember := range *pool.Members {
@@ -209,7 +209,7 @@ func deleteNode(node bigip.Node) error {
 						"pool":   pool.Name,
 						"member": poolMember.FullPath,
 						"thread": "F5",
-					}).Debugf("Pool member isn't in the form of <node>:<port>. Skipping it")
+					}).Debugf("The pool member isn't in <node>:<port> format. Skipping it")
 					continue
 				}
 
@@ -223,7 +223,7 @@ func deleteNode(node bigip.Node) error {
 						"pool":   pool.Name,
 						"member": poolMember.Name,
 						"thread": "F5",
-					}).Infof("Removing pool member from F5")
+					}).Infof("Removing the pool member from the F5")
 					if err := f5.RemovePoolMember(pool.FullPath, poolMemberConfig); err != nil {
 						return err
 					}
@@ -232,7 +232,7 @@ func deleteNode(node bigip.Node) error {
 						"member": poolMember.Name,
 						"pool":   pool.Name,
 						"thread": "F5",
-					}).Debugf("Removing pool member from state cache")
+					}).Debugf("Removing the pool member from the state cache")
 					newPoolMembers := []bigip.PoolMember{}
 					for _, pm := range *pool.Members {
 						if pm.FullPath != poolMember.FullPath {
@@ -241,7 +241,7 @@ func deleteNode(node bigip.Node) error {
 					}
 
 					pool.Members = &newPoolMembers
-					break		// Don't scan the remaining pool members
+					break // Don't scan the remaining pool members
 				}
 			}
 		}
@@ -252,7 +252,7 @@ func deleteNode(node bigip.Node) error {
 	log.WithFields(log.Fields{
 		"node":   node.Name,
 		"thread": "F5",
-	}).Infof("Removing node from F5")
+	}).Infof("Removing the node from the F5")
 
 	if err := f5.DeleteNode(node.FullPath); err != nil {
 		return err
@@ -263,7 +263,7 @@ func deleteNode(node bigip.Node) error {
 	log.WithFields(log.Fields{
 		"node":   node.Name,
 		"thread": "F5",
-	}).Debugf("Removing node from state cache")
+	}).Debugf("Removing the node from the state cache")
 
 	for idx, stateNode := range f5State.Nodes {
 		if node.FullPath == stateNode.FullPath {
@@ -325,32 +325,39 @@ func deletePool(index int) error {
 /*
 ** deleteVirtualServer
 **
-** Takes an index into the f5State.Virtuals slice, and deletes that virtual server
-** off the F5.  If successful, it is also removed from the f5State.Virtuals slice.
+** Takes a bigip.Virtual structure, and deletes that virtual server
+** off the F5. If successful, it is removed from the f5State.Virtuals
+** cache.
 **
 ** If anything went wrong, the error is returned to the caller to handle.
  */
 
-func deleteVirtualServer(index int) error {
+func deleteVirtualServer(vs bigip.VirtualServer) error {
 
-	// Get the virtual server
-
-	vs := f5State.Virtuals[index]
-
-	// Call the F5 to delete it
+	// Call the F5 to delete the virtual server
 
 	log.WithFields(log.Fields{
-		"thread": "F5",
-		"vs":     vs.Name,
-	}).Infof("Removing virtual server.")
+		"thread":        "F5",
+		"virtualServer": vs.Name,
+	}).Infof("Removing the virtual server from the F5")
 
 	if err := f5.DeleteVirtualServer(vs.FullPath); err != nil {
 		return err
 	}
 
-	// Remove it from the list of virtuals in the F5 state
+	// Remove it from the list of virtual servers in the F5 state cache
 
-	f5State.Virtuals = append(f5State.Virtuals[:index], f5State.Virtuals[index+1:]...)
+	log.WithFields(log.Fields{
+		"thread":        "F5",
+		"virtualServer": vs.Name,
+	}).Debugf("Removing the virtual server from the state cache")
+
+	for idx, stateVS := range f5State.Virtuals {
+		if vs.FullPath == stateVS.FullPath {
+			f5State.Virtuals = append(f5State.Virtuals[:idx], f5State.Virtuals[idx+1:]...)
+			break
+		}
+	}
 
 	return nil
 }
@@ -369,7 +376,9 @@ func applyF5Diffs(k8sState KubernetesState) error {
 
 	// Delete any virtual servers that are in the F5, but no longer in Kubernetes.
 
-	for idx, f5vs := range f5State.Virtuals {
+	f5Virtuals := make([]bigip.VirtualServer, len(f5State.Virtuals))
+	copy(f5Virtuals, f5State.Virtuals)
+	for _, f5vs := range f5Virtuals {
 		found := false
 		for _, vs := range k8sState {
 			vsName := f5VirtualServerName(vs)
@@ -379,7 +388,7 @@ func applyF5Diffs(k8sState KubernetesState) error {
 			}
 		}
 		if !found {
-			if err := deleteVirtualServer(idx); err != nil {
+			if err := deleteVirtualServer(f5vs); err != nil {
 				log.Errorf(err.Error())
 			}
 		}
@@ -748,7 +757,7 @@ func buildCurrentLTMState() error {
 				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
 					log.WithFields(log.Fields{
 						"thread": "F5",
-						"vs": virtualServer.Name,
+						"vs":     virtualServer.Name,
 					}).Debugf("Adding virtual server to state cache")
 					f5State.Virtuals = append(f5State.Virtuals, virtualServer)
 					break
