@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2018 Matthew Zahorik <matt.zahorik@gmail.com>
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -126,18 +126,17 @@ func f5NodeName(vs KsVirtualServer, memberIndex int) string {
 
 var f5 *bigip.BigIP
 
-/*
-** deleteMonitor
-**
-** Takes an index into the f5State.Monitors slice, and deletes that monitor
-** off the F5. If successful, it is removed from the f5State.Monitors slice.
-**
-** Prior to deleting the monitor, all pools in our partition are scanned
-** to see if there's an association with the monitor, and if so, the
-** monitor is removed from the pool before deleting the monitor.
-**
-** If anything went wrong, the error is returned to the caller to handle.
- */
+/* deleteMonitor
+
+Takes an index into the f5State.Monitors slice, and deletes that monitor
+off the F5. If successful, it is removed from the f5State.Monitors slice.
+
+Prior to deleting the monitor, all pools in our partition are scanned
+to see if there's an association with the monitor, and if so, the
+monitor is removed from the pool before deleting the monitor.
+
+If anything went wrong, the error is returned to the caller to handle.
+*/
 
 func deleteMonitor(index int) error {
 
@@ -173,18 +172,17 @@ func deleteMonitor(index int) error {
 	return nil
 }
 
-/*
-** deleteNode
-**
-** Takes a bigip.Node structure, and deletes that node off the F5.
-** If successful, it is removed from the f5State.Nodes cache.
-**
-** Prior to deleting the node, all pool members in our partition are scanned
-** to see if there's an association with the node, and if so, the pool member
-** is removed from the pool before deleting the node.
-**
-** If anything went wrong, the error is returned to the caller to handle.
- */
+/* deleteNode
+
+Takes a bigip.Node structure, and deletes that node off the F5.
+If successful, it is removed from the f5State.Nodes cache.
+
+Prior to deleting the node, all pool members in our partition are scanned
+to see if there's an association with the node, and if so, the pool member
+is removed from the pool before deleting the node.
+
+If anything went wrong, the error is returned to the caller to handle.
+*/
 
 func deleteNode(node bigip.Node) error {
 
@@ -258,7 +256,7 @@ func deleteNode(node bigip.Node) error {
 		return err
 	}
 
-	// Remove it from the list of nodes in the F5 state cache
+	// Remove it from the array of nodes in the F5 state cache
 
 	log.WithFields(log.Fields{
 		"node":   node.Name,
@@ -275,62 +273,74 @@ func deleteNode(node bigip.Node) error {
 	return nil
 }
 
-/*
-** deletePool
-**
-** Takes an index into the f5State.Pools slice, and deletes that pool off the F5.
-** If successful, it is removed from the f5State.Pools slice.
-**
-** Prior to deleting the pool, all virtual servers in our partition are scanned
-** to see if there's an association with the pool, and if so, the pool is
-** removed from the virtual server before deleting the pool.
-**
-** If anything went wrong, the error is returned to the caller to handle.
- */
+/* deletePool
 
-func deletePool(index int) error {
+Takes a bigip.Pool structure, and deletes that pool off the F5.
+If successful, it is removed from the f5State.Pools cache.
 
-	pool := f5State.Pools[index]
+Prior to deleting the pool, all vrtual servers in our partition
+are scanned to see if there's an association with the pool, and
+if so, the reference to the pool is removed from the virtual
+server before deleting the pool.  *** THIS IS A FUTURE TODO ***
+
+If anything went wrong, the error is returned to the caller to handle.
+*/
+
+func deletePool(pool bigip.Pool) error {
+
+	// Walk the array of virtual servers
 
 	for _, vs := range f5State.Virtuals {
+
+		// If a reference to the pool is found in a virtual
+		// server, modify the virtual server to remove the reference
 
 		if vs.Pool == pool.FullPath {
 
 			log.WithFields(log.Fields{
-				"pool":   pool.Name,
-				"thread": "F5",
-				"vs":     vs.Name,
-			}).Infof("Removing pool from virtual server. ****TODO****")
+				"pool":          pool.Name,
+				"thread":        "F5",
+				"virtualServer": vs.Name,
+			}).Infof("Removing the pool reference ****TODO****")
 		}
 	}
 
-	// Call the F5 to delete it
+	// Call the F5 to delete the pool
 
 	log.WithFields(log.Fields{
 		"pool":   pool.Name,
 		"thread": "F5",
-	}).Infof("Removing pool.")
+	}).Infof("Removing the pool from the F5")
 
 	if err := f5.DeletePool(pool.FullPath); err != nil {
 		return err
 	}
 
-	// Remove it from the list of pools in the F5 state
+	// Remove it from the array of pools in the F5 state cache
 
-	f5State.Pools = append(f5State.Pools[:index], f5State.Pools[index+1:]...)
+	log.WithFields(log.Fields{
+		"pool":   pool.Name,
+		"thread": "F5",
+	}).Debugf("Removing the pool from the state cache")
+
+	for idx, statePool := range f5State.Pools {
+		if pool.FullPath == statePool.FullPath {
+			f5State.Pools = append(f5State.Pools[:idx], f5State.Pools[idx+1:]...)
+			break
+		}
+	}
 
 	return nil
 }
 
-/*
-** deleteVirtualServer
-**
-** Takes a bigip.Virtual structure, and deletes that virtual server
-** off the F5. If successful, it is removed from the f5State.Virtuals
-** cache.
-**
-** If anything went wrong, the error is returned to the caller to handle.
- */
+/* deleteVirtualServer
+
+Takes a bigip.Virtual structure, and deletes that virtual server
+off the F5. If successful, it is removed from the f5State.Virtuals
+cache.
+
+If anything went wrong, the error is returned to the caller to handle.
+*/
 
 func deleteVirtualServer(vs bigip.VirtualServer) error {
 
@@ -345,7 +355,7 @@ func deleteVirtualServer(vs bigip.VirtualServer) error {
 		return err
 	}
 
-	// Remove it from the list of virtual servers in the F5 state cache
+	// Remove it from the array of virtual servers in the F5 state cache
 
 	log.WithFields(log.Fields{
 		"thread":        "F5",
@@ -396,7 +406,9 @@ func applyF5Diffs(k8sState KubernetesState) error {
 
 	// Delete any pools in the F5 not in Kubernetes
 
-	for idx, f5pool := range f5State.Pools {
+	f5Pools := make([]bigip.Pool, len(f5State.Pools))
+	copy(f5Pools, f5State.Pools)
+	for _, f5pool := range f5Pools {
 		found := false
 		for _, vs := range k8sState {
 			poolName := f5PoolName(vs)
@@ -406,7 +418,7 @@ func applyF5Diffs(k8sState KubernetesState) error {
 			}
 		}
 		if !found {
-			if err := deletePool(idx); err != nil {
+			if err := deletePool(f5pool); err != nil {
 				log.Errorf(err.Error())
 			}
 		}
