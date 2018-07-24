@@ -128,19 +128,20 @@ var f5 *bigip.BigIP
 
 /* deleteMonitor
 
-Takes an index into the f5State.Monitors slice, and deletes that monitor
-off the F5. If successful, it is removed from the f5State.Monitors slice.
+Takes a bigip.Monitor structure, and deletes that monitor off
+the F5. If successful, it is removed from the f5State.Monitors
+cache.
 
-Prior to deleting the monitor, all pools in our partition are scanned
-to see if there's an association with the monitor, and if so, the
-monitor is removed from the pool before deleting the monitor.
+Prior to deleting the monitor, all pools in our partition are
+scanned to see if there's a reference to the monitor, and if so,
+the monitor reference is removed from the pool.
 
 If anything went wrong, the error is returned to the caller to handle.
 */
 
-func deleteMonitor(index int) error {
+func deleteMonitor(monitor bigip.Monitor) error {
 
-	monitor := f5State.Monitors[index]
+	// Walk the array of pools
 
 	for _, pool := range f5State.Pools {
 
@@ -150,24 +151,34 @@ func deleteMonitor(index int) error {
 				"monitor": monitor.Name,
 				"pool":    pool.Name,
 				"thread":  "F5",
-			}).Infof("Removing monitor from pool. ****TODO****")
+			}).Infof("Removing the monitor reference ****TODO****")
 		}
 	}
 
-	// Call the F5 to delete it
+	// Call the F5 to delete the monitor
 
 	log.WithFields(log.Fields{
 		"monitor": monitor.Name,
 		"thread":  "F5",
-	}).Infof("Removing monitor.")
+	}).Infof("Removing the monitor from the F5")
 
 	if err := f5.DeleteMonitor(monitor.FullPath, monitor.MonitorType); err != nil {
 		return err
 	}
 
-	// Remove it from the list of virtuals in the F5 state
+	// Remove it from the array of monitors in the F5 state cache
 
-	f5State.Monitors = append(f5State.Monitors[:index], f5State.Monitors[index+1:]...)
+	log.WithFields(log.Fields{
+		"node":   monitor.Name,
+		"thread": "F5",
+	}).Debugf("Removing the monitor from the state cache")
+
+	for idx, stateMonitor := range f5State.Monitors {
+		if monitor.FullPath == stateMonitor.FullPath {
+			f5State.Monitors = append(f5State.Monitors[:idx], f5State.Monitors[idx+1:]...)
+			break
+		}
+	}
 
 	return nil
 }
@@ -426,7 +437,9 @@ func applyF5Diffs(k8sState KubernetesState) error {
 
 	// Delete monitors
 
-	for idx, f5monitor := range f5State.Monitors {
+	f5Monitors := make([]bigip.Monitor, len(f5State.Monitors))
+	copy(f5Monitors, f5State.Monitors)
+	for _, f5monitor := range f5Monitors {
 		found := false
 		for _, vs := range k8sState {
 			monitorName := f5MonitorName(vs)
@@ -436,7 +449,7 @@ func applyF5Diffs(k8sState KubernetesState) error {
 			}
 		}
 		if !found {
-			if err := deleteMonitor(idx); err != nil {
+			if err := deleteMonitor(f5monitor); err != nil {
 				log.Errorf(err.Error())
 			}
 		}
