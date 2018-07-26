@@ -126,6 +126,728 @@ func f5NodeName(vs KsVirtualServer, memberIndex int) string {
 
 var f5 *bigip.BigIP
 
+const f5Description = "Managed by Kubernetes. Please do not make manual changes."
+
+var f5Metadata = bigip.Metadata{
+	Name:    "f5-ingress-ctlr-managed",
+	Value:   "true",
+	Persist: "true",
+}
+
+func addNode(vs KsVirtualServer, memberIdx int) error {
+
+	nodeName := f5NodeName(vs,memberIdx)
+	nodeFullPath := "/" + globalConfig.Partition + "/" + nodeName 
+
+	for _, node := range f5State.Nodes {
+		if nodeName == node.Name {
+			return nil // Nodes don't change, just return if present
+		}
+	}
+
+	nodeConfig := &bigip.Node{
+		Description: f5Description,
+		Address:     vs.Members[memberIdx].IP,
+		Name:        nodeName,
+		Partition:   globalConfig.Partition,
+	}
+	nodeConfig.Metadata = append([]bigip.Metadata{}, f5Metadata)
+	
+	log.WithFields(log.Fields{
+		"node":   nodeName,
+		"thread": "F5",
+	}).Info("Adding the node to the F5")
+	configJson, _ := json.Marshal(nodeConfig)
+	log.WithFields(log.Fields{
+		"config":  string(configJson),
+		"thread":  "F5",
+	}).Debug("Configuration is...")
+
+	if err := f5.AddNode(nodeConfig); err != nil {
+		return err
+	}
+
+	node, err := f5.GetNode(nodeFullPath)
+	if err != nil {
+		return err
+	}
+
+	if node == nil {
+		return fmt.Errorf("f5.GetNode returned nil")
+	}
+
+	log.WithFields(log.Fields{
+		"node":   nodeName,
+		"thread": "F5",
+	}).Debug("Adding the node to the state cache")
+	f5State.Nodes = append(f5State.Nodes,*node)
+
+	return nil
+}
+
+func addPoolMember(vs KsVirtualServer, memberIdx int) error {
+
+	memberName := f5PoolMemberName(vs,memberIdx)
+	memberFullPath := "/" + globalConfig.Partition + "/" + memberName
+	poolName := f5PoolName(vs)
+	poolFullPath := "/" + globalConfig.Partition + "/" + poolName
+
+	poolFound := false
+	for _, pool := range f5State.Pools {
+		if poolName == pool.Name {
+			poolFound = true
+			if pool.Members != nil {
+				for _, poolMember := range *pool.Members {
+					if memberName == poolMember.Name {
+						return nil
+					}
+				}
+			}
+		}
+	}
+
+	if !poolFound {
+		return nil // Don't try anything if the parent pool is not configured
+	}
+	
+
+	memberConfig := &bigip.PoolMember{
+		Description: f5Description,
+		Name:        memberName,
+		Partition:   globalConfig.Partition,
+	}
+	memberConfig.Metadata = append([]bigip.Metadata{}, f5Metadata)
+
+	log.WithFields(log.Fields{
+		"member": memberName,
+		"pool":   poolName,
+		"thread": "F5",
+	}).Info("Adding a pool member to the F5")
+	configJson, _ := json.Marshal(memberConfig)
+	log.WithFields(log.Fields{
+		"config":  string(configJson),
+		"thread":  "F5",
+	}).Debug("Configuration is...")
+
+	if err := f5.CreatePoolMember(poolFullPath,memberConfig); err != nil {
+		return err
+	}
+
+	member, err := f5.GetPoolMember(poolFullPath,memberFullPath)
+	if err != nil {
+		return err
+	}
+
+	if member == nil {
+		return fmt.Errorf("f5.GetPoolMember returned nil")
+	}
+
+	log.WithFields(log.Fields{
+		"member": memberName,
+		"thread": "F5",
+	}).Debug("Adding the member to the state cache")
+//	f5State.Nodes = append(f5State.Nodes,*node)
+	for idx, pool := range f5State.Pools {
+		if poolName == pool.Name {
+			log.Debug("Found the pool object")
+			newPoolMembers := []bigip.PoolMember{}
+			if pool.Members != nil {
+				log.Debug("We have existing members in the pool")
+				log.Debugf("Current struct: %+v", newPoolMembers)
+				newPoolMembers = append(newPoolMembers, *pool.Members...)
+			}
+			newPoolMembers = append(newPoolMembers, *member)
+			log.Debugf("Final struct: %+v", newPoolMembers)
+			f5State.Pools[idx].Members = &newPoolMembers
+		}
+	}
+
+	return nil
+}
+
+func addOrChangeMonitor(vs KsVirtualServer) error {
+
+	monitorName := f5MonitorName(vs)
+	monitorFullPath := "/" + globalConfig.Partition + "/" + monitorName
+	var monitorConfig bigip.Monitor
+
+	existingFound := false
+	for _, monitor := range f5State.Monitors {
+		if monitorName == monitor.Name {
+			monitorConfig.Description = monitor.Description
+			monitorConfig.Interval = monitor.Interval
+			monitorConfig.ReceiveString = monitor.ReceiveString
+			monitorConfig.SendString = monitor.SendString
+			monitorConfig.Timeout = monitor.Timeout
+			existingFound = true
+			break
+		}
+	}
+
+	if !existingFound {
+		monitorConfig.FullPath = monitorFullPath
+		monitorConfig.Metadata = append([]bigip.Metadata{}, f5Metadata)
+		monitorConfig.Name = monitorName
+		monitorConfig.Partition = globalConfig.Partition
+	}
+
+	updated := false
+
+	if f5Description != monitorConfig.Description {
+		monitorConfig.Description = f5Description
+		updated = true
+	}
+	if vs.Monitor.Interval != monitorConfig.Interval {
+		if !(vs.Monitor.Interval == 0 && monitorConfig.Interval == 5) {
+			monitorConfig.Interval = vs.Monitor.Interval
+			if vs.Monitor.Interval == 0 {
+				monitorConfig.Interval = 5
+			}
+			updated = true
+		}
+	}
+
+	if vs.Monitor.Receive != monitorConfig.ReceiveString {
+		monitorConfig.ReceiveString = vs.Monitor.Receive
+		updated = true
+	}
+
+	if vs.Monitor.Send != monitorConfig.SendString {
+		if !((vs.Monitor.Send == "" || vs.Monitor.Send == "GET /\r\n") && monitorConfig.SendString == "GET /\\r\\n") {
+			monitorConfig.SendString = vs.Monitor.Send
+			if vs.Monitor.Send == "" {
+				monitorConfig.SendString = "GET /\\r\\n"
+			}
+			updated = true
+		}
+	}
+
+	if vs.Monitor.Timeout != monitorConfig.Timeout {
+		if !(vs.Monitor.Timeout == 0 && monitorConfig.Timeout == 16) {
+			monitorConfig.Timeout = vs.Monitor.Timeout
+			if vs.Monitor.Timeout == 0 {
+				monitorConfig.Timeout = 16
+			}
+			updated = true
+		}
+	}
+
+	if existingFound && !updated {
+		return nil
+	}
+
+	if existingFound {
+		log.WithFields(log.Fields{
+			"monitor": monitorName,
+			"thread":  "F5",
+		}).Infof("Updating the monitor on the F5")
+		configJson, _ := json.Marshal(monitorConfig)
+		log.WithFields(log.Fields{
+			"config":  string(configJson),
+			"thread":  "F5",
+		}).Debugf("Configuration is...")
+		err := f5.PatchMonitor(monitorFullPath, vs.Monitor.Type, &monitorConfig);
+		if err != nil {
+			return err
+		}
+	} else {
+		log.WithFields(log.Fields{
+			"monitor": monitorName,
+			"thread":  "F5",
+		}).Infof("Adding the monitor to the F5")
+		configJson, _ := json.Marshal(monitorConfig)
+		log.WithFields(log.Fields{
+			"config":  string(configJson),
+			"thread":  "F5",
+		}).Debugf("Configuration is...")
+
+		if err := f5.AddMonitor(&monitorConfig, vs.Monitor.Type); err != nil {
+			return err
+		}
+	}
+
+	monitor, err := f5.GetMonitor(monitorFullPath, vs.Monitor.Type)
+	if err != nil {
+		return err
+	}
+
+	if monitor == nil {
+		return fmt.Errorf("f5.GetMonitor returned nil")
+	}
+
+	if existingFound {
+		log.WithFields(log.Fields{
+			"monitor": monitorName,
+			"thread":  "F5",
+			"type":    vs.Monitor.Type,
+		}).Debugf("Updating the monitor in the state cache")
+		for idx, f5monitor := range f5State.Monitors {
+			if monitorName == f5monitor.Name {
+				f5State.Monitors[idx] = *monitor
+				break
+			}
+		}
+	} else {
+		log.WithFields(log.Fields{
+			"monitor": monitorName,
+			"thread":  "F5",
+			"type":    vs.Monitor.Type,
+		}).Debugf("Adding the monitor to the state cache")
+		f5State.Monitors = append(f5State.Monitors,*monitor)
+	}
+
+	return nil
+}
+
+func addOrChangePool(vs KsVirtualServer) error {
+
+	poolName := f5PoolName(vs)
+	poolFullPath := "/" + globalConfig.Partition + "/" + poolName
+	var poolConfig bigip.Pool
+
+	existingFound := false
+	for _, pool := range f5State.Pools {
+		if poolName == pool.Name {
+			poolConfig.Description = pool.Description
+			poolConfig.LoadBalancingMode = pool.LoadBalancingMode
+			poolConfig.Monitor = strings.TrimRight(pool.Monitor," ")
+			existingFound = true
+			break
+		}
+	}
+
+	if !existingFound {
+		poolConfig.FullPath = poolFullPath
+		poolConfig.Metadata = append([]bigip.Metadata{}, f5Metadata)
+		poolConfig.Name = poolName
+		poolConfig.Partition = globalConfig.Partition
+	}
+
+	updated := false
+
+	if f5Description != poolConfig.Description {
+		poolConfig.Description = f5Description
+		updated = true
+	}
+
+	if vs.LBMode != poolConfig.LoadBalancingMode {
+		if !(vs.LBMode == "" && poolConfig.LoadBalancingMode == "round-robin") {
+			poolConfig.LoadBalancingMode = vs.LBMode
+			updated = true
+		}
+	}
+
+	monitorName := f5MonitorName(vs)
+	monitorFullPath := ""
+	for _, monitor := range f5State.Monitors {
+		if monitorName == monitor.Name {
+			monitorFullPath = monitor.FullPath
+			break
+		}
+	}
+
+	if monitorFullPath != poolConfig.Monitor {
+		poolConfig.Monitor = monitorFullPath
+		updated = true
+	}
+
+	if existingFound && !updated {
+		return nil
+	}
+
+	if existingFound {
+		log.WithFields(log.Fields{
+			"pool":   poolName,
+			"thread": "F5",
+		}).Infof("Updating the pool on the F5")
+		configJson, _ := json.Marshal(poolConfig)
+		log.WithFields(log.Fields{
+			"config": string(configJson),
+			"thread": "F5",
+		}).Debugf("Configuration is...")
+		err := f5.ModifyPool(poolFullPath, &poolConfig);
+		if err != nil {
+			return err
+		}
+	} else {
+		log.WithFields(log.Fields{
+			"pool":   poolName,
+			"thread": "F5",
+		}).Infof("Adding the pool to the F5")
+		configJson, _ := json.Marshal(poolConfig)
+		log.WithFields(log.Fields{
+			"config": string(configJson),
+			"thread": "F5",
+		}).Debugf("Configuration is...")
+
+		if err := f5.AddPool(&poolConfig); err != nil {
+			return err
+		}
+	}
+
+	pool, err := f5.GetPool(poolFullPath)
+	if err != nil {
+		return err
+	}
+
+	if pool == nil {
+		return fmt.Errorf("f5.GetPool returned nil")
+	}
+
+	poolMembers, err := f5.PoolMembers(pool.FullPath)
+	if err != nil {
+		return err
+	}
+
+	if poolMembers == nil {
+		return fmt.Errorf("f5.PoolMembers returned nil")
+	}
+
+	pool.Members = &poolMembers.PoolMembers
+
+	if existingFound {
+		log.WithFields(log.Fields{
+			"pool":   poolName,
+			"thread": "F5",
+		}).Debugf("Updating the pool in the state cache")
+		for idx, f5pool := range f5State.Pools {
+			if poolName == f5pool.Name {
+				f5State.Pools[idx] = *pool
+				break
+			}
+		}
+	} else {
+		log.WithFields(log.Fields{
+			"pool":   poolName,
+			"thread": "F5",
+		}).Debugf("Adding the pool to the state cache")
+		f5State.Pools = append(f5State.Pools,*pool)
+	}
+
+	return nil
+}
+
+func addOrChangeVirtualServer(vs KsVirtualServer) error {
+
+	vsName := f5VirtualServerName(vs)
+	vsFullPath := "/" + globalConfig.Partition + "/" + vsName
+	var vsConfig bigip.VirtualServer
+
+	existingFound := false
+	for _, vs := range f5State.Virtuals {
+		if vsName == vs.Name {
+			vsConfig = vs
+			existingFound = true
+			break
+		}
+	}
+
+	if !existingFound {
+		vsConfig.FullPath = vsFullPath
+		vsConfig.Metadata = append([]bigip.Metadata{}, f5Metadata)
+		vsConfig.Name = vsName
+		vsConfig.Partition = globalConfig.Partition
+	}
+
+	updated := false
+
+	configJson, _ := json.Marshal(vsConfig)
+		log.WithFields(log.Fields{
+		"config": string(configJson),
+		"thread": "F5",
+	}).Debug("Configuration is...")
+
+	if f5Description != vsConfig.Description {
+		vsConfig.Description = f5Description
+		updated = true
+	}
+
+	vsNewIP := strings.Replace(vs.IP, "10.226.197", "10.226.195", 1) // A temporary thing while working in the lab to use existing ingress on new network
+
+	vsDestination := fmt.Sprintf("/%s/%s:%d", globalConfig.Partition, vsNewIP, vs.Port)
+
+	if vsDestination != vsConfig.Destination {
+		log.Debug("Updating destination")
+		vsConfig.Destination = vsDestination
+		updated = true
+	}
+
+	if "tcp" != vsConfig.IPProtocol {
+		log.Debug("Updating ipprotocol")
+		vsConfig.IPProtocol = "tcp"
+		updated = true
+	}
+
+	if "255.255.255.255" != vsConfig.Mask {
+		log.Debug("Updating mask")
+		vsConfig.Mask = "255.255.255.255"
+		updated = true
+	}
+
+	if "0.0.0.0/0" != vsConfig.Source {
+		log.Debug("Updating source")
+		vsConfig.Source = "0.0.0.0/0"
+		updated = true
+	}
+
+	if "automap" != vsConfig.SourceAddressTranslation.Type {
+		log.Debug("Updating snat type")
+		vsConfig.SourceAddressTranslation.Type = "automap"
+		updated = true
+	}
+
+	if vs.DefPersist == "" && len(vsConfig.Persistence)>0 {
+		log.Debug("Default persistence updated (removed)")
+		vsConfig.Persistence = []bigip.Persistence{}
+		updated = true
+	}
+
+	if vs.DefPersist != "" && len(vsConfig.Persistence)>1 {
+		log.Debug("Default persistence updated (too many)")
+		updated = true
+	}
+
+	if vs.DefPersist != "" {
+		splitString := strings.Split(vs.DefPersist, "/")
+		found := false
+		for _, p := range vsConfig.Persistence {
+			if p.Name == splitString[2] && p.Partition == splitString[1] && p.Default == "yes" {
+				found = true
+			}
+		}
+		if !found {
+			log.Debug("Updated default persistence (added it)")
+			updated = true
+		}
+		defPersist := bigip.Persistence{
+			Name:      splitString[2],
+			Partition: splitString[1],
+			Default:   "yes",
+		}
+		vsConfig.Persistence = append([]bigip.Persistence{}, defPersist)
+	}
+
+	if vs.FBPersist != vsConfig.FallbackPersistence {
+		log.Debug("Fallback persistence updated")
+		vsConfig.FallbackPersistence = vs.FBPersist
+		updated = true
+	}
+
+	newProfile := []bigip.Profile{}
+	profileUpdated := false
+
+	found := false
+	for _, p := range vsConfig.Profiles {
+		if p.Name == "http" && p.Partition == "Common" && p.Context == "all" {
+			newProfile = append(newProfile, p)
+			found = true
+		}
+	}
+	if !found {
+		httpProfile := bigip.Profile{
+			Context:   "all",
+			Name:      "http",
+			Partition: "Common",
+		}
+		newProfile = append(newProfile, httpProfile)
+		profileUpdated = true
+	}
+
+	found = false
+	for _, p := range vsConfig.Profiles {
+		if p.Name == "tcp" && p.Partition == "Common" && p.Context == "all" {
+			newProfile = append(newProfile, p)
+			found = true
+		}
+	}
+	if !found {
+		tcpProfile := bigip.Profile{
+			Context:   "all",
+			Name:      "tcp",
+			Partition: "Common",
+		}
+		newProfile = append(newProfile, tcpProfile)
+		profileUpdated = true
+	}
+	if vs.ClientSSL == "" {
+		for _, p := range vsConfig.Profiles {
+			if p.Context == "clientside" {
+				profileUpdated = true
+			}
+		}
+	}
+
+	if vs.ClientSSL != "" {
+		splitString := strings.Split(vs.ClientSSL, "/")
+
+		found = false
+		for _, p := range vsConfig.Profiles {
+			if p.Name == splitString[2] && p.Partition == splitString[1] && p.Context == "clientside" {
+				newProfile = append(newProfile, p)
+				found = true
+			}
+		}
+		if !found {
+			clientSSLProfile := bigip.Profile{
+				Context:   "clientside",
+				Name:      splitString[2],
+				Partition: splitString[1],
+			}
+			newProfile = append(newProfile, clientSSLProfile)
+			profileUpdated = true
+		}
+	}
+
+	if vs.ServerSSL == "" {
+		for _, p := range vsConfig.Profiles {
+			if p.Context == "serverside" {
+				profileUpdated = true
+			}
+		}
+	}
+
+	if vs.ServerSSL != "" {
+		splitString := strings.Split(vs.ServerSSL, "/")
+	
+		found = false
+		for _, p := range vsConfig.Profiles {
+			if p.Name == splitString[2] && p.Partition == splitString[1] && p.Context == "serverside" {
+				newProfile = append(newProfile, p)
+				found = true
+			}
+		}
+		if !found {
+			serverSSLProfile := bigip.Profile{
+				Context:   "serverside",
+				Name:      splitString[2],
+				Partition: splitString[1],
+			}
+			newProfile = append(newProfile, serverSSLProfile)
+			profileUpdated = true
+		}
+	}
+
+	if len(newProfile) != len(vsConfig.Profiles) {
+		profileUpdated = true
+	}
+
+	if profileUpdated {
+		log.Debug("Profiles updated")
+		vsConfig.Profiles = append([]bigip.Profile{}, newProfile...)
+		updated = true
+	}
+
+	rulesUpdated := false
+	for _, f5Rule := range vsConfig.Rules {
+		found := false
+		for _, r := range vs.IRules {
+			if r == f5Rule {
+				found = true
+			}
+		}
+		if !found {
+			rulesUpdated = true
+		}
+	}
+
+	for _, r := range vs.IRules {
+		found := false
+		for _, f5Rule := range vsConfig.Rules {
+			if f5Rule == r {
+				found = true
+			}
+		}
+		if !found {
+			rulesUpdated = true
+		}
+	}
+
+	if rulesUpdated {
+		log.Debug("Updating IRules")
+		vsConfig.Rules = vs.IRules
+	}
+
+	poolName := f5PoolName(vs)
+	poolFullPath := ""
+	for _, pool := range f5State.Pools {
+		if poolName == pool.Name {
+			poolFullPath = pool.FullPath
+			break
+		}
+	}
+
+	if poolFullPath != vsConfig.Pool {
+		log.Debug("Updating Pool")
+		vsConfig.Pool = poolFullPath
+		updated = true
+	}
+
+	if existingFound && !updated {
+		return nil
+	}
+
+	if existingFound {
+		log.WithFields(log.Fields{
+			"virtualServer": vsName,
+			"thread":        "F5",
+		}).Info("Updating the virtual server on the F5")
+		configJson, _ := json.Marshal(vsConfig)
+		log.WithFields(log.Fields{
+			"config": string(configJson),
+			"thread": "F5",
+		}).Debug("Configuration is...")
+//		err := f5.ModifyVirtualServer(vsFullPath, &vsConfig);
+//		if err != nil {
+//			return err
+//		}
+		return nil
+	} else {
+		log.WithFields(log.Fields{
+			"virtualServer": vsName,
+			"thread":        "F5",
+		}).Info("Adding the virtual server to the F5")
+		configJson, _ := json.Marshal(vsConfig)
+		log.WithFields(log.Fields{
+			"config": string(configJson),
+			"thread": "F5",
+		}).Debug("Configuration is...")
+
+		if err := f5.AddVirtualServer(&vsConfig); err != nil {
+			return err
+		}
+	}
+
+	newVs, err := f5.GetVirtualServer(vsFullPath)
+	if err != nil {
+		return err
+	}
+
+	if newVs == nil {
+		return fmt.Errorf("f5.GetVirtualServer returned nil")
+	}
+
+	if existingFound {
+		log.WithFields(log.Fields{
+			"virtualServer": vsName,
+			"thread":        "F5",
+		}).Debug("Updating the virtual server in the state cache")
+		for idx, f5vs := range f5State.Virtuals {
+			if vsName == f5vs.Name {
+				f5State.Virtuals[idx] = *newVs
+				break
+			}
+		}
+	} else {
+		log.WithFields(log.Fields{
+			"virtualServer": vsName,
+			"thread":        "F5",
+		}).Debug("Adding the virtual server to the state cache")
+		f5State.Virtuals = append(f5State.Virtuals,*newVs)
+	}
+
+	return nil
+}
+
 /* deleteMonitor
 
 Takes a bigip.Monitor structure, and deletes that monitor off
@@ -199,7 +921,7 @@ func deleteNode(node bigip.Node) error {
 
 	// Walk the array of pools
 
-	for _, pool := range f5State.Pools {
+	for idx, pool := range f5State.Pools {
 
 		if pool.Members != nil {
 
@@ -249,7 +971,7 @@ func deleteNode(node bigip.Node) error {
 						}
 					}
 
-					pool.Members = &newPoolMembers
+					f5State.Pools[idx].Members = &newPoolMembers
 					break // Don't scan the remaining pool members
 				}
 			}
@@ -385,15 +1107,50 @@ func deleteVirtualServer(vs bigip.VirtualServer) error {
 
 func applyF5Diffs(k8sState KubernetesState) error {
 
-	// Step through virtual servers, creating as necessary
-
-	metadata := bigip.Metadata{
-		Name:    "f5-ingress-ctlr-managed",
-		Value:   "true",
-		Persist: "true",
+	log.Debug("List of nodes before changes:")
+	for _, node := range f5State.Nodes {
+		log.Debugf("  %s", node.Name)
+	}
+	log.Debug("List of monitors before changes:")
+	for _, monitor := range f5State.Monitors {
+		log.Debugf("  %s", monitor.Name)
+	}
+	log.Debug("List of pools before changes:")
+	for _, pool := range f5State.Pools {
+		log.Debugf("  %s", pool.Name)
+		if pool.Members != nil {
+                        for _, poolMember := range *pool.Members {
+				log.Debugf("    %s", poolMember.Name)
+			}
+		}
+	}
+	log.Debug("List of virtual servers before changes:")
+	for _, vs := range f5State.Virtuals {
+		log.Debugf("  %s", vs.Name)
 	}
 
-	description := "Managed by Kubernetes. Please do not make manual changes."
+	// Step through virtual servers, adding or modifying sub-components as
+	// necessary
+
+	for _, vs := range k8sState {
+		if err := addOrChangeMonitor(vs); err != nil {
+			log.Errorf(err.Error())
+		}
+		if err := addOrChangePool(vs); err != nil {
+			log.Errorf(err.Error())
+		}
+		for idx, _ := range vs.Members {
+			if err := addNode(vs, idx); err != nil {
+				log.Errorf(err.Error())
+			}
+			if err := addPoolMember(vs, idx); err != nil {
+				log.Errorf(err.Error())
+			}
+		}
+		if err := addOrChangeVirtualServer(vs); err != nil {
+			log.Errorf(err.Error())
+		}
+	}
 
 	// Delete any virtual servers that are in the F5, but no longer in Kubernetes.
 
@@ -479,7 +1236,7 @@ func applyF5Diffs(k8sState KubernetesState) error {
 			}
 		}
 	}
-
+/*
 	var notNewVirtuals KubernetesState
 	for _, vs := range k8sState {
 		vsName := f5VirtualServerName(vs)
@@ -493,33 +1250,11 @@ func applyF5Diffs(k8sState KubernetesState) error {
 		if found {
 			notNewVirtuals = append(notNewVirtuals, vs)
 		} else {
-
-			monitorConfig := &bigip.Monitor{
-				Description:   description,
-				Interval:      vs.Monitor.Interval,
-				Name:          f5MonitorName(vs),
-				Partition:     globalConfig.Partition,
-				ReceiveString: vs.Monitor.Receive,
-				SendString:    vs.Monitor.Send,
-			}
-			monitorConfig.Metadata = append([]bigip.Metadata{}, metadata)
-
-			log.WithFields(log.Fields{
-				"name": monitorConfig.Name,
-				"type": vs.Monitor.Type,
-			}).Debugf("Adding new monitor")
-			log.Debugf(fmt.Sprintf("Config: %+v", monitorConfig))
-
 			monitorOk := true
-			if err := f5.AddMonitor(monitorConfig, vs.Monitor.Type); err != nil {
-				log.WithFields(log.Fields{
-					"name": monitorConfig.Name,
-					"type": vs.Monitor.Type,
-				}).Infof("Monitor creation failed, proceeding without it")
-				log.Infof("Error: " + err.Error())
+			if err := addOrChangeMonitor(vs); err != nil {
+				log.Errorf(err.Error())
 				monitorOk = false
 			}
-
 			poolConfig := &bigip.Pool{
 				Description:       description,
 				LoadBalancingMode: vs.LBMode,
@@ -717,6 +1452,29 @@ func applyF5Diffs(k8sState KubernetesState) error {
 			}
 		}
 	}
+*/
+	log.Debug("List of nodes after changes:")
+	for _, node := range f5State.Nodes {
+		log.Debugf("  %s", node.Name)
+	}
+	log.Debug("List of monitors after changes:")
+	for _, monitor := range f5State.Monitors {
+		log.Debugf("  %s", monitor.Name)
+	}
+	log.Debug("List of pools after changes:")
+	for _, pool := range f5State.Pools {
+		log.Debugf("  %s", pool.Name)
+		if pool.Members != nil {
+			for _, poolMember := range *pool.Members {
+				log.Debugf("    %s", poolMember.Name)
+			}
+		}
+	}
+	log.Debug("List of virtual servers after changes:")
+	for _, vs := range f5State.Virtuals {
+		log.Debugf("  %s", vs.Name)
+	}
+
 
 	return nil
 }
@@ -780,10 +1538,19 @@ func buildCurrentLTMState() error {
 		if virtualServer.Partition == globalConfig.Partition {
 			for _, metadata := range virtualServer.Metadata {
 				if metadata.Name == "f5-ingress-ctlr-managed" && metadata.Value == "true" {
+					virtualProfiles, err := f5.VirtualServerProfiles(virtualServer.FullPath)
+					if err != nil {
+						log.WithFields(log.Fields{
+							"error":         err.Error(),
+							"thread":        "F5",
+							"virtualServer": virtualServer.Name,
+						}).Debug("Failed to fetch profiles")
+					} 
+					virtualServer.Profiles = virtualProfiles.Profiles
 					log.WithFields(log.Fields{
-						"thread": "F5",
-						"vs":     virtualServer.Name,
-					}).Debugf("Adding virtual server to state cache")
+						"thread":        "F5",
+						"virtualServer": virtualServer.Name,
+					}).Debug("Adding virtual server to state cache")
 					f5State.Virtuals = append(f5State.Virtuals, virtualServer)
 					break
 				}
@@ -973,8 +1740,9 @@ func getKubernetesState() (KubernetesState, error) {
 			err := json.Unmarshal([]byte(value), &monitors)
 			if err != nil {
 				log.Debugf("health monitor JSON parsing failed")
+			} else {
+				vs.Monitor = monitors[0]
 			}
-			vs.Monitor = monitors[0]
 		}
 
 		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/serverssl"]; ok == true {
