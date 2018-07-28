@@ -22,12 +22,14 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	infoblox "github.com/fanatic/go-infoblox"
 	"github.com/mzahorik/go-bigip"
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
@@ -44,6 +46,10 @@ var clientset *kubernetes.Clientset
 var globalConfig struct {
 	Partition   string
 	RouteDomain string
+	VIPCIDR     string
+	IbClient    infoblox.Client
+	IbNetwork   string
+	IbActive    bool
 }
 
 var f5State struct {
@@ -51,6 +57,49 @@ var f5State struct {
 	Pools    []bigip.Pool          `json:"pools",omitempty`
 	Monitors []bigip.Monitor       `json:"monitors",omitempty`
 	Nodes    []bigip.Node          `json:"nodes",omitempty`
+}
+
+// Initialize the connection to the Infoblox
+
+func initInfoblox() error {
+
+	var ibHost string
+	if ibHost = os.Getenv("INFOBLOX_HOST"); ibHost == "" {
+		return fmt.Errorf("The environment variable INFOBLOX_HOST is missing")
+	}
+
+	var ibUser string
+	if ibUser = os.Getenv("INFOBLOX_USER"); ibUser == "" {
+		return fmt.Errorf("The environment variable INFOBLOX_USER is missing")
+	}
+
+	var ibPassword string
+	if ibPassword = os.Getenv("INFOBLOX_PASSWORD"); ibPassword == "" {
+		return fmt.Errorf("The environment variable INFOBLOX_PASSWORD is missing")
+	}
+
+	ibURL := "https://" + ibHost + "/"
+
+	ibConn := infoblox.NewClient(ibURL, ibUser, ibPassword, false, false)
+
+	s := "network"
+	query := []infoblox.Condition{
+		infoblox.Condition{
+			Field: &s,
+			Value: globalConfig.VIPCIDR,
+		},
+	}
+
+	out, err := ibConn.Network().Find(query, nil)
+	if err != nil {
+		return err
+	}
+	networkRef := out[0]["_ref"].(string)
+	log.Debugf("Got an Infoblox network ref of %s for network %s", networkRef, globalConfig.VIPCIDR)
+	globalConfig.IbClient = *ibConn
+	globalConfig.IbNetwork = networkRef
+	globalConfig.IbActive = true
+	return nil
 }
 
 // Initialize the connection to Kubernetes
@@ -95,6 +144,15 @@ func f5VirtualServerName(vs KsVirtualServer) string {
 	return vsName
 }
 
+func f5VSRedirectName(vs KsVirtualServer) string {
+
+	portString := strconv.FormatInt(int64(80), 10)
+
+	vsName := "ingress_" + vs.Namespace + "_" + vs.Name + "_" + portString
+
+	return vsName
+}
+
 func f5PoolName(vs KsVirtualServer) string {
 
 	pName := "ingress_" + vs.Namespace + "_" + vs.Name
@@ -133,6 +191,44 @@ var f5Metadata = bigip.Metadata{
 	Name:    "f5-ingress-ctlr-managed",
 	Value:   "true",
 	Persist: "true",
+}
+
+func ibCreateDynamicHost(name string) (string, error) {
+
+	if !globalConfig.IbActive {
+		return "", nil
+	}
+
+	ibConn := globalConfig.IbClient
+
+	log.Debugf("Allocating IP address from the Infoblox on network %s", globalConfig.IbNetwork)
+	out, err := ibConn.NetworkObject(globalConfig.IbNetwork).NextAvailableIP(1, nil)
+	if err != nil {
+		return "", err
+	}
+
+	ipAddrs := []string{}
+	for _, v := range out["ips"].([]interface{}) {
+		ipAddrs = append(ipAddrs, v.(string))
+	}
+	if len(ipAddrs) != 1 {
+		if len(ipAddrs) == 0 {
+			return "", fmt.Errorf("No IP addresses are available from the Infoblox")
+		}
+		return "", fmt.Errorf("More than 1 IP address was returned from the Infoblox, this should never happen")
+	}
+	aRecord := url.Values{}
+	aRecord.Set("ipv4addr", ipAddrs[0])
+	aRecord.Set("name", name)
+	aRecord.Set("view", "default")
+
+	log.Debugf("Creating A record of %s with IP %s on the Infoblox", name, ipAddrs[0])
+	_, err = ibConn.RecordA().Create(aRecord, nil, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return ipAddrs[0], nil
 }
 
 func addNode(vs KsVirtualServer, memberIdx int) error {
@@ -603,7 +699,36 @@ func addOrChangeVirtualServer(vs KsVirtualServer) error {
 		updated = true
 	}
 
-	ipDest := vs.IP
+	ipDest := ""
+
+	if vs.IbEnabled {
+		if vs.IbDynamicIP {
+			if !existingFound {
+				hostname := vs.IbHostname
+				if hostname != "" {
+					var err error
+					ipDest, err = ibCreateDynamicHost(hostname)
+					if err != nil {
+						log.Info("Unable to allocate an IP from the Infoblox, will try again later")
+						log.Error(err.Error())
+					}
+				} else {
+					log.Info("We cannot create a dynamic IP address without a hostname")
+				}
+			} else {
+				log.Debugf("vsConfig.Destination = %s", vsConfig.Destination)
+				splitString := strings.Split(vsConfig.Destination, "/")
+				log.Debugf("splitString[2] = %s", splitString[2])
+				secondSplitString := strings.Split(splitString[2], "%")
+				log.Debugf("secondSplitString[0] = %s", secondSplitString[0])
+				ipDest = secondSplitString[0]
+			}
+		} else {
+			ipDest = vs.IP
+		}
+	} else {
+		ipDest = vs.IP
+	}
 
 	if ipDest == "" {
 		ipDest = "0.0.0.0"
@@ -901,6 +1026,219 @@ func addOrChangeVirtualServer(vs KsVirtualServer) error {
 	return nil
 }
 
+func addOrChangeVSRedirect(vs KsVirtualServer) error {
+
+	vsName := f5VSRedirectName(vs)
+	vsFullPath := "/" + globalConfig.Partition + "/" + vsName
+	var vsConfig bigip.VirtualServer
+
+	fieldsChanged := []string{}
+	existingFound := false
+	for _, vs := range f5State.Virtuals {
+		if vsName == vs.Name {
+			vsConfig = vs
+			existingFound = true
+			break
+		}
+	}
+
+	if !existingFound {
+		vsConfig.FullPath = vsFullPath
+		vsConfig.Metadata = append([]bigip.Metadata{}, f5Metadata)
+		vsConfig.Name = vsName
+		vsConfig.Partition = globalConfig.Partition
+	}
+
+	updated := false
+
+	if f5Description != vsConfig.Description {
+		vsConfig.Description = f5Description
+		updated = true
+	}
+
+	ipDest := vs.IP
+
+	if ipDest == "" {
+		ipDest = "0.0.0.0"
+	}
+
+	vsNewIP := strings.Replace(ipDest, "10.226.197", "10.226.195", 1) // A temporary thing while working in the lab to use existing ingress on new network
+
+	vsDestination := fmt.Sprintf("/%s/%s%%%s:80", globalConfig.Partition, vsNewIP, globalConfig.RouteDomain)
+
+	if vsDestination != vsConfig.Destination {
+		tmpStr := addPreField(existingFound, "Destination", vsConfig.Destination)
+		vsConfig.Destination = vsDestination
+		fieldsChanged = addPostField(fieldsChanged, tmpStr, vsConfig.Destination)
+		updated = true
+	}
+
+	if "tcp" != vsConfig.IPProtocol {
+		tmpStr := addPreField(existingFound, "IPProtocol", vsConfig.IPProtocol)
+		vsConfig.IPProtocol = "tcp"
+		fieldsChanged = addPostField(fieldsChanged, tmpStr, vsConfig.IPProtocol)
+		updated = true
+	}
+
+	if "255.255.255.255" != vsConfig.Mask {
+		tmpStr := addPreField(existingFound, "Mask", vsConfig.Mask)
+		vsConfig.Mask = "255.255.255.255"
+		fieldsChanged = addPostField(fieldsChanged, tmpStr, vsConfig.Mask)
+		updated = true
+	}
+
+	sourceStr := fmt.Sprintf("0.0.0.0%%%s/0", globalConfig.RouteDomain)
+	if sourceStr != vsConfig.Source && "0.0.0.0/0" != vsConfig.Source {
+		tmpStr := addPreField(existingFound, "Source", vsConfig.Source)
+		vsConfig.Source = sourceStr
+		fieldsChanged = addPostField(fieldsChanged, tmpStr, vsConfig.Source)
+		updated = true
+	}
+
+	if "automap" != vsConfig.SourceAddressTranslation.Type {
+		tmpStr := addPreField(existingFound, "SourceAddressTranslation.Type", vsConfig.SourceAddressTranslation.Type)
+		vsConfig.SourceAddressTranslation.Type = "automap"
+		fieldsChanged = addPostField(fieldsChanged, tmpStr, vsConfig.SourceAddressTranslation.Type)
+		updated = true
+	}
+
+	newProfile := []bigip.Profile{}
+	profileUpdated := false
+
+	found := false
+	for _, p := range vsConfig.Profiles {
+		if p.Name == "http" && p.Partition == "Common" && p.Context == "all" {
+			newProfile = append(newProfile, p)
+			found = true
+		}
+	}
+	if !found {
+		httpProfile := bigip.Profile{
+			Context:   "all",
+			Name:      "http",
+			Partition: "Common",
+		}
+		newProfile = append(newProfile, httpProfile)
+		profileUpdated = true
+	}
+
+	found = false
+	for _, p := range vsConfig.Profiles {
+		if p.Name == "tcp" && p.Partition == "Common" && p.Context == "all" {
+			newProfile = append(newProfile, p)
+			found = true
+		}
+	}
+	if !found {
+		tcpProfile := bigip.Profile{
+			Context:   "all",
+			Name:      "tcp",
+			Partition: "Common",
+		}
+		newProfile = append(newProfile, tcpProfile)
+		profileUpdated = true
+	}
+
+	if len(newProfile) != len(vsConfig.Profiles) {
+		profileUpdated = true
+	}
+
+	if profileUpdated {
+		log.Debug("Profiles updated")
+		vsConfig.Profiles = append([]bigip.Profile{}, newProfile...)
+		updated = true
+	}
+
+	rulesUpdated := true
+	if len(vsConfig.Rules) == 1 && vsConfig.Rules[0] == "/Common/_sys_https_redirect" {
+		rulesUpdated = false
+	}
+	if rulesUpdated {
+		log.Debug("Updating IRules")
+		vsConfig.Rules = []string{"/Common/_sys_https_redirect"}
+	}
+
+	poolName := f5PoolName(vs)
+	poolFullPath := ""
+	for _, pool := range f5State.Pools {
+		if poolName == pool.Name {
+			poolFullPath = pool.FullPath
+			break
+		}
+	}
+
+	if poolFullPath != vsConfig.Pool {
+		log.Debug("Updating Pool")
+		vsConfig.Pool = poolFullPath
+		updated = true
+	}
+
+	if existingFound && !updated {
+		return nil
+	}
+
+	if existingFound {
+		log.WithFields(log.Fields{
+			"changed":       fieldsChanged,
+			"virtualServer": vsName,
+			"thread":        "F5",
+		}).Info("Updating a virtual server redirect on the F5")
+		configJson, _ := json.Marshal(vsConfig)
+		log.WithFields(log.Fields{
+			"config": string(configJson),
+			"thread": "F5",
+		}).Debug("")
+		if err := f5.ModifyVirtualServer(vsFullPath, &vsConfig); err != nil {
+			return err
+		}
+	} else {
+		log.WithFields(log.Fields{
+			"added":         fieldsChanged,
+			"virtualServer": vsName,
+			"thread":        "F5",
+		}).Info("Adding a virtual server redirect to the F5")
+		configJson, _ := json.Marshal(vsConfig)
+		log.WithFields(log.Fields{
+			"config": string(configJson),
+			"thread": "F5",
+		}).Debug("")
+
+		if err := f5.AddVirtualServer(&vsConfig); err != nil {
+			return err
+		}
+	}
+
+	newVs, err := f5.GetVirtualServer(vsFullPath)
+	if err != nil {
+		return err
+	}
+
+	if newVs == nil {
+		return fmt.Errorf("f5.GetVirtualServer returned nil")
+	}
+
+	if existingFound {
+		log.WithFields(log.Fields{
+			"virtualServer": vsName,
+			"thread":        "F5",
+		}).Debug("Updating a virtual server redirect in the state cache")
+		for idx, f5vs := range f5State.Virtuals {
+			if vsName == f5vs.Name {
+				f5State.Virtuals[idx] = *newVs
+				break
+			}
+		}
+	} else {
+		log.WithFields(log.Fields{
+			"virtualServer": vsName,
+			"thread":        "F5",
+		}).Debug("Adding a virtual server redirect to the state cache")
+		f5State.Virtuals = append(f5State.Virtuals, *newVs)
+	}
+
+	return nil
+}
+
 /* deleteMonitor
 
 Takes a bigip.Monitor structure, and deletes that monitor off
@@ -1181,6 +1519,11 @@ func applyF5Diffs(k8sState KubernetesState) error {
 		if err := addOrChangeVirtualServer(vs); err != nil {
 			log.Error(err.Error())
 		}
+		if vs.Redirect {
+			if err := addOrChangeVSRedirect(vs); err != nil {
+				log.Error(err.Error())
+			}
+		}
 	}
 
 	// Delete any virtual servers that are in the F5, but no longer in Kubernetes.
@@ -1194,6 +1537,13 @@ func applyF5Diffs(k8sState KubernetesState) error {
 			if f5vs.Name == vsName {
 				found = true
 				break
+			}
+			if vs.Redirect {
+				vsRedirectName := f5VSRedirectName(vs)
+				if f5vs.Name == vsRedirectName {
+					found = true
+					break
+				}
 			}
 		}
 		if !found {
@@ -1442,19 +1792,22 @@ type KsVSMember struct {
 }
 
 type KsVirtualServer struct {
-	Name       string                `json:"name"`
-	Namespace  string                `json:"namespace"`
-	IP         string                `json:"ip"`
-	Port       int32                 `json:"port"`
-	ClientSSL  string                `json:"clientssl",omitempty`
-	ServerSSL  string                `json:"serverssl",omitempty`
-	Redirect   bool                  `json:"redirect",omitempty`
-	DefPersist string                `json:"persist",omitempty`
-	FBPersist  string                `json:"fallbackPersist",omitempty`
-	LBMode     string                `json:"lbmode",omitempty`
-	IRules     []string              `json:"rules",omitempty`
-	Members    []KsVSMember          `json:"members",omitempty`
-	Monitor    KsVSMonitorAttributes `json:"monitors",omitempty`
+	Name        string                `json:"name"`
+	Namespace   string                `json:"namespace"`
+	IP          string                `json:"ip"`
+	Port        int32                 `json:"port"`
+	ClientSSL   string                `json:"clientssl",omitempty`
+	ServerSSL   string                `json:"serverssl",omitempty`
+	Redirect    bool                  `json:"redirect",omitempty`
+	DefPersist  string                `json:"persist",omitempty`
+	FBPersist   string                `json:"fallbackPersist",omitempty`
+	LBMode      string                `json:"lbmode",omitempty`
+	IRules      []string              `json:"rules",omitempty`
+	Members     []KsVSMember          `json:"members",omitempty`
+	Monitor     KsVSMonitorAttributes `json:"monitors",omitempty`
+	IbEnabled   bool                  `json:"ibenabled",omitempty`
+	IbDynamicIP bool                  `json:"ibdynamicip",omitempty`
+	IbHostname  string                `json:"ibhostname",omitempty`
 }
 
 type KubernetesState []KsVirtualServer
@@ -1486,6 +1839,22 @@ func getKubernetesState() (KubernetesState, error) {
 		vs.Name = ingress.GetName()
 		vs.Namespace = ingress.GetNamespace()
 
+		if value, ok := ingress.ObjectMeta.Annotations["infoblox-ipam/hostname"]; ok == true {
+			vs.IbHostname = value
+		}
+
+		if value, ok := ingress.ObjectMeta.Annotations["infoblox-ipam/ip-allocation"]; ok == true {
+			if value == "dynamic" {
+				vs.IbDynamicIP = true
+				vs.IbEnabled = true
+			} else {
+				log.WithFields(log.Fields{
+					"ingress":   vs.Name,
+					"namespace": vs.Namespace,
+				}).Debug("Unknown value for infoblox-ipam/ip-allocation")
+			}
+		}
+
 		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/ip"]; ok == true {
 			if ip := net.ParseIP(value); ip != nil {
 				vs.IP = value
@@ -1497,10 +1866,17 @@ func getKubernetesState() (KubernetesState, error) {
 				}).Error("Invalid IP address for ip annotation")
 			}
 		} else {
-			log.WithFields(log.Fields{
-				"ingress":   vs.Name,
-				"namespace": vs.Namespace,
-			}).Info("No IP address, creating a headless virtual server")
+			if !vs.IbEnabled {
+				log.WithFields(log.Fields{
+					"ingress":   vs.Name,
+					"namespace": vs.Namespace,
+				}).Info("No IP address, creating a headless virtual server")
+			}
+		}
+
+		if vs.IP != "" && vs.IbHostname != "" {
+			vs.IbEnabled = true // If we have a fixed IP, and a hostname, manage the DNS entry only
+			vs.IbDynamicIP = false
 		}
 
 		if len(ingress.Spec.TLS) != 0 {
@@ -1673,7 +2049,7 @@ func main() {
 	}).Infof("F5-ingress-ctlr starting")
 	// initialize the Kubernetes connection
 
-	//	log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.DebugLevel)
 
 	err := initKubernetes()
 	if err != nil || clientset == nil {
@@ -1687,12 +2063,24 @@ func main() {
 		log.Error("The environment variable F5_ROUTE_DOMAIN must be set")
 		os.Exit(1)
 	}
+	globalConfig.IbActive = false
+	if globalConfig.VIPCIDR = os.Getenv("F5_VIP_CIDR"); globalConfig.VIPCIDR == "" {
+		log.Info("The CIDR range for the F5 VIP network is not set, disabling Infoblox integration")
+	}
+
+	if globalConfig.VIPCIDR != "" {
+		err := initInfoblox()
+		if err != nil {
+			log.Error("Could not initialize a connection to the Infoblox, disabling Infoblox integration")
+			log.Error(err.Error())
+		}
+	}
 
 	// clear F5 LTM state
 
 	for true {
 
-		log.Info("Refreshing the state of the F5")
+		log.Info("Reading full partition dump from F5, refreshing state cache")
 		f5State.Virtuals = []bigip.VirtualServer{}
 		f5State.Pools = []bigip.Pool{}
 		f5State.Monitors = []bigip.Monitor{}
