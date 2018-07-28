@@ -201,6 +201,19 @@ func ibCreateDynamicHost(name string) (string, error) {
 
 	ibConn := globalConfig.IbClient
 
+	log.Debugf("Doing IN A lookup of %s", name)
+	rec, err := ibConn.FindRecordA(name)
+	if err != nil {
+		return "", err
+	}
+	if rec != nil {
+		if len(rec) > 1 {
+			return "", fmt.Errorf("Found multiple IP addresses, please correct")
+		}
+		log.Debugf("Found existing IP of %s for %s, using that", rec[0].Ipv4Addr, name)
+		return rec[0].Ipv4Addr, nil
+	}
+
 	log.Debugf("Allocating IP address from the Infoblox on network %s", globalConfig.IbNetwork)
 	out, err := ibConn.NetworkObject(globalConfig.IbNetwork).NextAvailableIP(1, nil)
 	if err != nil {
@@ -1056,7 +1069,36 @@ func addOrChangeVSRedirect(vs KsVirtualServer) error {
 		updated = true
 	}
 
-	ipDest := vs.IP
+	ipDest := ""
+
+	if vs.IbEnabled {
+		if vs.IbDynamicIP {
+			if !existingFound {
+				hostname := vs.IbHostname
+				if hostname != "" {
+					var err error
+					ipDest, err = ibCreateDynamicHost(hostname)
+					if err != nil {
+						log.Info("Unable to allocate an IP from the Infoblox, will try again later")
+						log.Error(err.Error())
+					}
+				} else {
+					log.Info("We cannot create a dynamic IP address without a hostname")
+				}
+			} else {
+				log.Debugf("vsConfig.Destination = %s", vsConfig.Destination)
+				splitString := strings.Split(vsConfig.Destination, "/")
+				log.Debugf("splitString[2] = %s", splitString[2])
+				secondSplitString := strings.Split(splitString[2], "%")
+				log.Debugf("secondSplitString[0] = %s", secondSplitString[0])
+				ipDest = secondSplitString[0]
+			}
+		} else {
+			ipDest = vs.IP
+		}
+	} else {
+		ipDest = vs.IP
+	}
 
 	if ipDest == "" {
 		ipDest = "0.0.0.0"
