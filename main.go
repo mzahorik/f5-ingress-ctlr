@@ -18,10 +18,13 @@ limitations under the License.
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -29,7 +32,6 @@ import (
 	"strings"
 	"time"
 
-	infoblox "github.com/fanatic/go-infoblox"
 	"github.com/mzahorik/go-bigip"
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
@@ -47,8 +49,9 @@ var globalConfig struct {
 	Partition   string
 	RouteDomain string
 	VIPCIDR     string
-	IbClient    infoblox.Client
-	IbNetwork   string
+	IbHost      string
+	IbUser      string
+	IbPass      string
 	IbActive    bool
 }
 
@@ -57,49 +60,6 @@ var f5State struct {
 	Pools    []bigip.Pool          `json:"pools",omitempty`
 	Monitors []bigip.Monitor       `json:"monitors",omitempty`
 	Nodes    []bigip.Node          `json:"nodes",omitempty`
-}
-
-// Initialize the connection to the Infoblox
-
-func initInfoblox() error {
-
-	var ibHost string
-	if ibHost = os.Getenv("INFOBLOX_HOST"); ibHost == "" {
-		return fmt.Errorf("The environment variable INFOBLOX_HOST is missing")
-	}
-
-	var ibUser string
-	if ibUser = os.Getenv("INFOBLOX_USER"); ibUser == "" {
-		return fmt.Errorf("The environment variable INFOBLOX_USER is missing")
-	}
-
-	var ibPassword string
-	if ibPassword = os.Getenv("INFOBLOX_PASSWORD"); ibPassword == "" {
-		return fmt.Errorf("The environment variable INFOBLOX_PASSWORD is missing")
-	}
-
-	ibURL := "https://" + ibHost + "/"
-
-	ibConn := infoblox.NewClient(ibURL, ibUser, ibPassword, false, false)
-
-	s := "network"
-	query := []infoblox.Condition{
-		infoblox.Condition{
-			Field: &s,
-			Value: globalConfig.VIPCIDR,
-		},
-	}
-
-	out, err := ibConn.Network().Find(query, nil)
-	if err != nil {
-		return err
-	}
-	networkRef := out[0]["_ref"].(string)
-	log.Debugf("Got an Infoblox network ref of %s for network %s", networkRef, globalConfig.VIPCIDR)
-	globalConfig.IbClient = *ibConn
-	globalConfig.IbNetwork = networkRef
-	globalConfig.IbActive = true
-	return nil
 }
 
 // Initialize the connection to Kubernetes
@@ -193,55 +153,336 @@ var f5Metadata = bigip.Metadata{
 	Persist: "true",
 }
 
-func ibCreateDynamicHost(name string) (string, error) {
+var ibAddrs []ibAddr
+
+type ibAddr struct {
+	Ref  string // Infoblox reference
+	Name string
+	IP   string
+}
+
+type ibHosts struct {
+	IPAddr  string   `json:"ip_address"`
+	Names   []string `json:"names"`
+	Objects []string `json:"objects"`
+	View    string   `json:"network_view"`
+	Types   []string `json:"types"`
+}
+
+type ibV4Addr struct {
+	Host     string `json:"host"`
+	IPV4Addr string `json:"ipv4addr"`
+}
+
+type ibHostRecord struct {
+	IPAddrs []ibV4Addr `json:"ipv4addrs"`
+	Name    string     `json:"name"`
+	View    string     `json:"view"`
+}
+
+func ibRefreshState() error {
+
+	globalConfig.IbActive = false
+
+	if globalConfig.VIPCIDR == "" || globalConfig.IbHost == "" || globalConfig.IbUser == "" || globalConfig.IbPass == "" {
+		return nil
+	}
+
+	u := &url.URL{
+		Scheme:   "https",
+		Host:     globalConfig.IbHost,
+		Path:     "/wapi/v2.6/ipv4address",
+		RawQuery: "network=" + globalConfig.VIPCIDR + "&_return_fields%2B=extattrs&*F5-IPAM=true",
+	}
+
+	log.WithFields(log.Fields{
+		"subnet": globalConfig.VIPCIDR,
+		"thread": "Infoblox",
+	}).Info("Retrieving the list of hosts managed by this module from the Infoblox")
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(globalConfig.IbUser, globalConfig.IbPass)
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	client := &http.Client{Transport: tr}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	// Parse any IP addresses found, if any, into the IBAddrs structure
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode < 200 && resp.StatusCode > 299 {
+		return fmt.Errorf("Status code was not 2xx, but %d", resp.StatusCode)
+	}
+
+	var data []ibHosts
+	err = json.Unmarshal(body, &data)
+	if err != nil {
+		return err
+	}
+
+	globalConfig.IbActive = true
+
+	ibAddrs = []ibAddr{}
+
+	for _, ibh := range data {
+		iba := ibAddr{}
+		if len(ibh.Names) == 0 || len(ibh.Names) == 0 || len(ibh.Types) == 0 {
+			log.WithFields(log.Fields{
+				"ip":      ibh.IPAddr,
+				"names":   ibh.Names,
+				"objects": ibh.Objects,
+				"thread":  "Infoblox",
+				"types":   ibh.Types,
+				"view":    ibh.View,
+			}).Error("One of names/objects/types are empty for an Infoblox IP address record, skipping")
+			continue
+		}
+		if len(ibh.Names) > 1 || len(ibh.Objects) > 1 || len(ibh.Types) > 1 {
+			log.WithFields(log.Fields{
+				"ip":      ibh.IPAddr,
+				"names":   ibh.Names,
+				"objects": ibh.Objects,
+				"thread":  "Infoblox",
+				"types":   ibh.Types,
+				"view":    ibh.View,
+			}).Error("Multiple names/objects/types exist for an Infoblox IP address record, skipping")
+			continue
+		}
+		if ibh.Types[0] != "HOST" {
+			log.WithFields(log.Fields{
+				"ip":      ibh.IPAddr,
+				"names":   ibh.Names,
+				"objects": ibh.Objects,
+				"thread":  "Infoblox",
+				"types":   ibh.Types,
+				"view":    ibh.View,
+			}).Debug("This is not a host record, skipping")
+			continue
+		}
+		iba.Ref = ibh.Objects[0]
+		iba.Name = ibh.Names[0]
+		iba.IP = ibh.IPAddr
+
+		log.WithFields(log.Fields{
+			"ip":     iba.IP,
+			"name":   iba.Name,
+			"ref":    iba.Ref,
+			"thread": "Infoblox",
+		}).Debug("Adding a host from the Infoblox to the state cache")
+
+		ibAddrs = append(ibAddrs, iba)
+	}
+	return nil
+}
+
+func ibCreateHost(name string) (string, error) {
 
 	if !globalConfig.IbActive {
 		return "", nil
 	}
 
-	ibConn := globalConfig.IbClient
-
-	log.Debugf("Doing IN A lookup of %s", name)
-	rec, err := ibConn.FindRecordA(name)
-	if err != nil {
-		return "", err
-	}
-	if rec != nil {
-		if len(rec) > 1 {
-			return "", fmt.Errorf("Found multiple IP addresses, please correct")
+	for _, iba := range ibAddrs {
+		if iba.Name == name {
+			return iba.IP, nil
 		}
-		log.Debugf("Found existing IP of %s for %s, using that", rec[0].Ipv4Addr, name)
-		return rec[0].Ipv4Addr, nil
 	}
 
-	log.Debugf("Allocating IP address from the Infoblox on network %s", globalConfig.IbNetwork)
-	out, err := ibConn.NetworkObject(globalConfig.IbNetwork).NextAvailableIP(1, nil)
+	u := &url.URL{
+		Scheme: "https",
+		Host:   globalConfig.IbHost,
+		Path:   "/wapi/v2.6/record:host",
+	}
+
+	log.WithFields(log.Fields{
+		"name":   name,
+		"subnet": globalConfig.VIPCIDR,
+		"thread": "Infoblox",
+	}).Info("Creating a host record on the Infoblox")
+
+	// The JSON body is simple enough that we just generate here, rather than build a structure...
+
+	jsonString := "{ \"name\":\"" + name + "\", \"ipv4addrs\":[{\"ipv4addr\":\"func:nextavailableip:" + globalConfig.VIPCIDR + "\"}], \"use_ttl\":true, \"ttl\":60, \"extattrs\":{\"F5-IPAM\":{\"value\":\"true\"}}}"
+
+	req, err := http.NewRequest("POST", u.String(), strings.NewReader(jsonString))
 	if err != nil {
 		return "", err
 	}
 
-	ipAddrs := []string{}
-	for _, v := range out["ips"].([]interface{}) {
-		ipAddrs = append(ipAddrs, v.(string))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(globalConfig.IbUser, globalConfig.IbPass)
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
-	if len(ipAddrs) != 1 {
-		if len(ipAddrs) == 0 {
-			return "", fmt.Errorf("No IP addresses are available from the Infoblox")
+
+	client := &http.Client{Transport: tr}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		resp.Body.Close()
+		return "", err
+	}
+
+	if resp.StatusCode < 200 && resp.StatusCode > 299 {
+		resp.Body.Close()
+		return "", fmt.Errorf("Status code was not 2xx, but %d", resp.StatusCode)
+	}
+
+	hostRef := string(body[1 : len(body)-1])
+
+	u = &url.URL{
+		Scheme: "https",
+		Host:   globalConfig.IbHost,
+		Path:   "/wapi/v2.6/" + hostRef,
+	}
+
+	log.WithFields(log.Fields{
+		"ibref":  hostRef,
+		"name":   name,
+		"thread": "Infoblox",
+	}).Debug("Retreiving the IP address details based on the reference received")
+
+	// The JSON body is simple enough that we just generate here, rather than build a structure...
+
+	req, err = http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		return "", err
+	}
+
+	req.SetBasicAuth(globalConfig.IbUser, globalConfig.IbPass)
+
+	client = &http.Client{Transport: tr}
+
+	resp, err = client.Do(req)
+	if err != nil {
+		return "", err
+	}
+
+	defer resp.Body.Close()
+
+	body, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode < 200 && resp.StatusCode > 299 {
+		return "", fmt.Errorf("Status code was not 2xx, but %d", resp.StatusCode)
+	}
+
+	var ibh ibHostRecord
+	err = json.Unmarshal(body, &ibh)
+	if err != nil {
+		return "", err
+	}
+
+	if len(ibh.IPAddrs) == 0 {
+		return "", fmt.Errorf("No IP address was found in the response")
+	}
+
+	if len(ibh.IPAddrs) > 1 {
+		return "", fmt.Errorf("Too many IP addresses were found in the response")
+	}
+
+	iba := ibAddr{
+		Ref:  hostRef,
+		Name: ibh.Name,
+		IP:   ibh.IPAddrs[0].IPV4Addr,
+	}
+
+	log.WithFields(log.Fields{
+		"ip":     iba.IP,
+		"name":   iba.Name,
+		"ref":    iba.Ref,
+		"thread": "Infoblox",
+	}).Debug("Adding the host to the state cache")
+
+	ibAddrs = append(ibAddrs, iba)
+
+	return iba.IP, nil
+}
+
+func ibReleaseIP(ipAddr string) error {
+
+	found := false
+	var idx int
+	var ip ibAddr
+	for idx, ip = range ibAddrs {
+		if ipAddr == ip.IP {
+			found = true
+			break
 		}
-		return "", fmt.Errorf("More than 1 IP address was returned from the Infoblox, this should never happen")
 	}
-	aRecord := url.Values{}
-	aRecord.Set("ipv4addr", ipAddrs[0])
-	aRecord.Set("name", name)
-	aRecord.Set("view", "default")
+	if !found {
+		return fmt.Errorf("The IP address %s was not found in the Infoblox state cache", ipAddr)
+	}
 
-	log.Debugf("Creating A record of %s with IP %s on the Infoblox", name, ipAddrs[0])
-	_, err = ibConn.RecordA().Create(aRecord, nil, nil)
+	u := &url.URL{
+		Scheme: "https",
+		Host:   globalConfig.IbHost,
+		Path:   "/wapi/v2.6/" + ip.Ref,
+	}
+
+	log.WithFields(log.Fields{
+		"hostname": ip.Name,
+		"ibref":    ip.Ref,
+		"ip":       ip.IP,
+		"thread":   "Infoblox",
+	}).Info("Removing the host record from the Infoblox")
+
+	req, err := http.NewRequest("DELETE", u.String(), nil)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	return ipAddrs[0], nil
+	req.SetBasicAuth(globalConfig.IbUser, globalConfig.IbPass)
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	client := &http.Client{Transport: tr}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	resp.Body.Close()
+
+	log.WithFields(log.Fields{
+		"hostname": ip.Name,
+		"ibref":    ip.Ref,
+		"ip":       ip.IP,
+		"thread":   "Infoblox",
+	}).Debug("Removing the host record from the Infoblox state cache")
+
+	ibAddrs = append(ibAddrs[:idx], ibAddrs[idx+1:]...)
+	return nil
 }
 
 func addNode(vs KsVirtualServer, memberIdx int) error {
@@ -720,7 +961,7 @@ func addOrChangeVirtualServer(vs KsVirtualServer) error {
 				hostname := vs.IbHostname
 				if hostname != "" {
 					var err error
-					ipDest, err = ibCreateDynamicHost(hostname)
+					ipDest, err = ibCreateHost(hostname)
 					if err != nil {
 						log.Info("Unable to allocate an IP from the Infoblox, will try again later")
 						log.Error(err.Error())
@@ -729,11 +970,8 @@ func addOrChangeVirtualServer(vs KsVirtualServer) error {
 					log.Info("We cannot create a dynamic IP address without a hostname")
 				}
 			} else {
-				log.Debugf("vsConfig.Destination = %s", vsConfig.Destination)
 				splitString := strings.Split(vsConfig.Destination, "/")
-				log.Debugf("splitString[2] = %s", splitString[2])
 				secondSplitString := strings.Split(splitString[2], "%")
-				log.Debugf("secondSplitString[0] = %s", secondSplitString[0])
 				ipDest = secondSplitString[0]
 			}
 		} else {
@@ -1077,7 +1315,7 @@ func addOrChangeVSRedirect(vs KsVirtualServer) error {
 				hostname := vs.IbHostname
 				if hostname != "" {
 					var err error
-					ipDest, err = ibCreateDynamicHost(hostname)
+					ipDest, err = ibCreateHost(hostname)
 					if err != nil {
 						log.Info("Unable to allocate an IP from the Infoblox, will try again later")
 						log.Error(err.Error())
@@ -1086,11 +1324,8 @@ func addOrChangeVSRedirect(vs KsVirtualServer) error {
 					log.Info("We cannot create a dynamic IP address without a hostname")
 				}
 			} else {
-				log.Debugf("vsConfig.Destination = %s", vsConfig.Destination)
 				splitString := strings.Split(vsConfig.Destination, "/")
-				log.Debugf("splitString[2] = %s", splitString[2])
 				secondSplitString := strings.Split(splitString[2], "%")
-				log.Debugf("secondSplitString[0] = %s", secondSplitString[0])
 				ipDest = secondSplitString[0]
 			}
 		} else {
@@ -2110,17 +2345,31 @@ func main() {
 		log.Info("The CIDR range for the F5 VIP network is not set, disabling Infoblox integration")
 	}
 
-	if globalConfig.VIPCIDR != "" {
-		err := initInfoblox()
-		if err != nil {
-			log.Error("Could not initialize a connection to the Infoblox, disabling Infoblox integration")
-			log.Error(err.Error())
-		}
+	if globalConfig.IbHost = os.Getenv("INFOBLOX_HOST"); globalConfig.IbHost == "" {
+		log.Info("The environment variable INFOBLOX_HOST is missing, disabling Infoblox integration")
+	}
+
+	if globalConfig.IbUser = os.Getenv("INFOBLOX_USER"); globalConfig.IbUser == "" {
+		log.Info("The environment variable INFOBLOX_USER is missing, disabling Infoblox integration")
+	}
+
+	if globalConfig.IbPass = os.Getenv("INFOBLOX_PASSWORD"); globalConfig.IbPass == "" {
+		log.Info("The environment variable INFOBLOX_PASSWORD is missing, disabling Infoblox integration")
 	}
 
 	// clear F5 LTM state
 
 	for true {
+
+		log.Info("Reading full dump from Infoblox, refreshing state cache")
+		globalConfig.IbActive = false
+		err = ibRefreshState()
+		if err != nil {
+			log.Error("Could not fetch current state from the Infoblox")
+			log.Error(err.Error())
+			time.Sleep(30 * time.Second)
+			continue
+		}
 
 		log.Info("Reading full partition dump from F5, refreshing state cache")
 		f5State.Virtuals = []bigip.VirtualServer{}
@@ -2154,6 +2403,28 @@ func main() {
 				log.Error(err.Error())
 				time.Sleep(15 * time.Second)
 				continue
+			}
+			// Temporarily here
+			copyOfibAddrs := make([]ibAddr, len(ibAddrs))
+			copy(copyOfibAddrs, ibAddrs)
+			for _, iba := range copyOfibAddrs {
+				found := false
+				for _, f5vs := range f5State.Virtuals {
+					tmp := strings.Split(f5vs.Destination, "/")
+					tmp = strings.Split(tmp[2], "%")
+					tmp = strings.Split(tmp[0], ":")
+					ipAddr := tmp[0]
+
+					if ipAddr == iba.IP {
+						found = true
+						break
+					}
+				}
+				if !found {
+					if err := ibReleaseIP(iba.IP); err != nil {
+						log.Error(err.Error())
+					}
+				}
 			}
 			time.Sleep(15 * time.Second)
 		}

@@ -23,12 +23,6 @@
   version = "v2.8.0"
 
 [[projects]]
-  branch = "master"
-  name = "github.com/fanatic/go-infoblox"
-  packages = ["."]
-  revision = "4b43bbde57d7ea2b01640d7e8a5f8f6861ade3ed"
-
-[[projects]]
   name = "github.com/ghodss/yaml"
   packages = ["."]
   revision = "0ca9ea5df5451ffdf184b4428c902747c2c11cd7"
@@ -205,8 +199,7 @@
     "http/httpguts",
     "http2",
     "http2/hpack",
-    "idna",
-    "publicsuffix"
+    "idna"
   ]
   revision = "3673e40ba22529d22c3fd7c93e97b0ce50fa7bdd"
 
@@ -392,6 +385,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "8604746dac204a8bf4b7cfea72c38eb2a53bc86e88d2f6c592a8ddf3e313bed0"
+  inputs-digest = "028db234c24a9af63a8397c6f4d2c0614ae34c6af74b6342a20a59b9a84d9a21"
   solver-name = "gps-cdcl"
   solver-version = 1
