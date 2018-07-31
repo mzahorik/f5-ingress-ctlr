@@ -2105,6 +2105,50 @@ func getKubernetesState() (KubernetesState, error) {
 	}
 	log.Debug("Successfully fetched all Service objects from Kubernetes")
 
+	// Temporarily here, loop through the Infoblox IP addresses, updating the IP of any
+	// objects that have Infoblox entries.
+
+	for _, iba := range ibAddrs {
+		for _, ing := range ingresses.Items {
+			hostname, ok := ing.ObjectMeta.Annotations["infoblox-ipam/hostname"]
+			if !ok {
+				continue
+			}
+			dynIP, ok := ing.ObjectMeta.Annotations["infoblox-ipam/ip-allocation"]
+			if !ok {
+				continue
+			}
+			if dynIP != "dynamic" {
+				continue
+			}
+			if hostname != iba.Name {
+				continue
+			}
+			// If we make it here, we have an ingress requesting a dynamic IP, and we
+			// have a desired hostname that matches this Infoblox IP address record.
+			//
+			// Check that the IP address in the Ingress load balancer status field
+			// matches.  If not, set it and let Kubernetes know about the update.
+
+			if len(ing.Status.LoadBalancer.Ingress) > 0 {
+				if ing.Status.LoadBalancer.Ingress[0].IP == iba.IP {
+					continue // If already set correctly, do not update
+				}
+			}
+			newIP := []v1.LoadBalancerIngress{
+				v1.LoadBalancerIngress{
+					IP: iba.IP,
+				},
+			}
+			ing.Status.LoadBalancer.Ingress = newIP
+			log.Debugf("Updating Ingress %s/%s with IP %s", ing.Namespace, ing.Name, iba.IP)
+			_, err := clientset.ExtensionsV1beta1().Ingresses(ing.Namespace).UpdateStatus(&ing)
+			if err != nil {
+				log.Error(err.Error())
+			}
+		}
+	}
+
 	// Loop through the Ingress objects, building complete virtual server objects
 
 	for _, ingress := range ingresses.Items {

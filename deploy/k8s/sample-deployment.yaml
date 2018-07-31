@@ -1,0 +1,84 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: f5-ingress-ctlr
+spec:
+  replicas: 1
+  template:
+    metadata:
+      name: f5-ingress-ctlr
+      labels:
+        app: f5-ingress-ctlr
+    spec:
+      serviceAccountName: f5-ingress-ctlr-serviceaccount
+      securityContext:
+        runAsUser: 1000
+      containers:
+        - name: f5-ingress-ctlr
+          # replace the version as needed
+          image: "mzahorik/f5-ingress-ctlr:0.1.0"
+          imagePullPolicy: "Always"
+          env:
+            - name: F5_USER
+              value: k8s-auto-ny2
+            - name: F5_HOST
+              value: 4.3.2.1
+            - name: F5_VIP_CIDR
+              value: "1.2.3.0/24"
+            - name: F5_ROUTE_DOMAIN
+              value: "3"
+            - name: INFOBLOX_HOST
+              value: "6.7.8.9"
+            - name: INFOBLOX_USER
+              value: f5-ingress-ctlr
+          command: ["/f5-ingress-ctlr"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+  name: f5-ingress-ctlr-clusterrole
+rules:
+- apiGroups:
+  - ""
+  - extensions
+  resources:
+  - services
+  - endpoints
+  - namespaces
+  - ingresses
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  - extensions
+  resources:
+  - events
+  - ingresses/status
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - create
+  - patch
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: f5-ingress-ctlr-serviceaccount
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: f5-ingress-ctlr-clusterrole-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: f5-ingress-ctlr-clusterrole
+subjects:
+- kind: ServiceAccount
+  name: f5-ingress-ctlr-serviceaccount
