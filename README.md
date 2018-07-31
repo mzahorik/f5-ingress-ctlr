@@ -20,29 +20,22 @@ The controller assumes that POD IPs are directly routable by the F5 without NAT.
 
 A sample Kubernetes YAML file can be found in deploy/k8s.  Modify the following environment variables:
 
-+-----------------+-------------------------------------------------------------------------+---------------+
-| Variable        | Description                                                             | Sample Value  |
-+-----------------+-------------------------------------------------------------------------+---------------+
-| F5_HOST         | The DNS name/IP address where the F5 BIG-IP answers iControl REST calls | 192.168.1.1   |
-+-----------------+-------------------------------------------------------------------------+---------------+
-| F5_ROUTE_DOMAIN | The numeric route domain for the virtual IP subnet on the BIG-IP        | 123           |
-|                 | This will be automatically detected and deprecated in a future release  |               |
-+-----------------+-------------------------------------------------------------------------+---------------+
-| F5_VIP_CIDR     | The subnet on the F5 where virtual IP addresses reside                  | 10.1.123.1/24 |
-+-----------------+-------------------------------------------------------------------------+---------------+
-| INFOBLOX_HOST   | The DNS name/IP address for the Infoblox API                            | 192.168.1.100 |
-|                 | If omitted, the Infoblox integration will be disabled                   |               |
-+-----------------+-------------------------------------------------------------------------+---------------+
+Variable | Description | Sample Value
+-------- | ----------- | ------------
+F5_HOST | The DNS name/IP address where the F5 BIG-IP answers iControl REST calls | 192.168.1.1
+F5_ROUTE_DOMAIN | The numeric route domain for the virtual IP subnet on the BIG-IP. This will be automatically detected and deprecated in a future release  | 123
+F5_VIP_CIDR | The subnet on the F5 where virtual IP addresses reside | 10.1.123.1/24
+INFOBLOX_HOST | The DNS name/IP address for the Infoblox API. If omitted, the Infoblox integration will be disabled | 192.168.1.100
 
 and then:
 
-kubectl create secret f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password>
-kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>
+`kubectl create secret f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password>`
+`kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>`
 
 if using the Infoblox integration, add in the Infoblox credentials:
 
-kubectl create secret f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password> --from-literal=infoblox_user=<your Infoblox username> --from-literal=infoblox_pass=<your Infoblox password>
-kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>
+`kubectl create secret f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password> --from-literal=infoblox_user=<your Infoblox username> --from-literal=infoblox_pass=<your Infoblox password>`
+`kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>`
 
 # Usage
 
@@ -50,12 +43,9 @@ Once deployed and running, the Ingress controller will monitor Kubernetes for th
 
 The Ingress controller accepts the following annotations:
 
-+-----------------------------+---------------+--------------------+----------------+
-| Annotations:                | Default Value | Valid Values       | Sample Value   |
-+-----------------------------+---------------+--------------------+----------------+
-| infoblox-ipam/hostname      | none          | any valid DNS name | www.domain.com |
-| infoblox-ipam/ip-allocation | none          | dynamic            | dynamic        |
-+-----------------------------+---------------+--------------------+----------------+
+Annotations | Default Value | Valid Values | Sample Value
+infoblox-ipam/hostname | none | any valid DNS name | www.domain.com
+infoblox-ipam/ip-allocation | none | dynamic | dynamic
 
 These annotations control the Infoblox IP address allocation on a per-Ingress basis.  Both annotations must be set, otherwise they are both ignored.  If these annotations are unset, see virtual-server.f5.com/ip.
 
