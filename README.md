@@ -44,6 +44,7 @@ Once deployed and running, the Ingress controller will monitor Kubernetes for th
 The Ingress controller accepts the following annotations:
 
 Annotations | Default Value | Valid Values | Sample Value
+----------- | ------------- | ------------ | ------------
 infoblox-ipam/hostname | none | any valid DNS name | www.domain.com
 infoblox-ipam/ip-allocation | none | dynamic | dynamic
 
