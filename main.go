@@ -2390,7 +2390,7 @@ func main() {
 
 	if ok := os.Getenv("DEBUG"); ok != "" {
 		log.SetLevel(log.DebugLevel)
-	} else
+	} else {
 		log.SetLevel(log.InfoLevel)
 	}
 
