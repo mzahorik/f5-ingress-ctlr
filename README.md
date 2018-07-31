@@ -29,13 +29,13 @@ INFOBLOX_HOST | The DNS name/IP address for the Infoblox API. If omitted, the In
 
 and then:
 
-`kubectl create secret f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password>`
-`kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>`
+`kubectl create secret generic f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password>
+kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>`
 
 if using the Infoblox integration, add in the Infoblox credentials:
 
-`kubectl create secret f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password> --from-literal=infoblox_user=<your Infoblox username> --from-literal=infoblox_pass=<your Infoblox password>`
-`kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>`
+`kubectl create secret generic f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password> --from-literal=infoblox_user=<your Infoblox username> --from-literal=infoblox_pass=<your Infoblox password>
+kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>`
 
 # Usage
 

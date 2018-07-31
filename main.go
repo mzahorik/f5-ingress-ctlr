@@ -49,6 +49,9 @@ var globalConfig struct {
 	Partition   string
 	RouteDomain string
 	VIPCIDR     string
+	F5Host      string
+	F5User      string
+	F5Pass      string
 	IbHost      string
 	IbUser      string
 	IbPass      string
@@ -182,8 +185,6 @@ type ibHostRecord struct {
 
 func ibRefreshState() error {
 
-	globalConfig.IbActive = false
-
 	if globalConfig.VIPCIDR == "" || globalConfig.IbHost == "" || globalConfig.IbUser == "" || globalConfig.IbPass == "" {
 		return nil
 	}
@@ -196,9 +197,8 @@ func ibRefreshState() error {
 	}
 
 	log.WithFields(log.Fields{
-		"subnet": globalConfig.VIPCIDR,
 		"thread": "Infoblox",
-	}).Info("Retrieving the list of hosts managed by this module from the Infoblox")
+	}).Info("Refreshing local state cache")
 
 	req, err := http.NewRequest("GET", u.String(), nil)
 	if err != nil {
@@ -427,6 +427,10 @@ func ibCreateHost(name string) (string, error) {
 }
 
 func ibReleaseIP(ipAddr string) error {
+
+	if !globalConfig.IbActive {
+		return nil
+	}
 
 	found := false
 	var idx int
@@ -676,6 +680,7 @@ func addOrChangeMonitor(vs KsVirtualServer) error {
 		fieldsChanged = append(fieldsChanged, "Description:reset")
 		updated = true
 	}
+
 	if vs.Monitor.Interval != monitorConfig.Interval {
 		if !(vs.Monitor.Interval == 0 && monitorConfig.Interval == 5) {
 			tmpStr := addPreFieldInt(existingFound, "Interval", monitorConfig.Interval)
@@ -726,13 +731,15 @@ func addOrChangeMonitor(vs KsVirtualServer) error {
 	if existingFound {
 		log.WithFields(log.Fields{
 			"changed": fieldsChanged,
-			"monitor": monitorName,
+			"monitor": monitorFullPath,
 			"thread":  "F5",
+			"type":    vs.Monitor.Type,
 		}).Info("Updating a monitor on the F5")
 		configJson, _ := json.Marshal(monitorConfig)
 		log.WithFields(log.Fields{
 			"config": string(configJson),
 			"thread": "F5",
+			"type":   vs.Monitor.Type,
 		}).Debug("")
 		err := f5.PatchMonitor(monitorFullPath, vs.Monitor.Type, &monitorConfig)
 		if err != nil {
@@ -741,8 +748,9 @@ func addOrChangeMonitor(vs KsVirtualServer) error {
 	} else {
 		log.WithFields(log.Fields{
 			"added":   fieldsChanged,
-			"monitor": monitorName,
+			"monitor": monitorFullPath,
 			"thread":  "F5",
+			"type":    vs.Monitor.Type,
 		}).Info("Adding a monitor to the F5")
 		configJson, _ := json.Marshal(monitorConfig)
 		log.WithFields(log.Fields{
@@ -764,11 +772,19 @@ func addOrChangeMonitor(vs KsVirtualServer) error {
 		return fmt.Errorf("f5.GetMonitor returned nil")
 	}
 
+	// For reasons that aren't clear, the monitor.MonitorType field is not set correctly
+	// after creating it (but it is there later when you pull a full list of monitors)
+	//
+	// Since I know it here, I'm forcefully setting it here so everything downstream
+	// has it.
+
+	monitor.MonitorType = vs.Monitor.Type
+	
 	if existingFound {
 		log.WithFields(log.Fields{
-			"monitor": monitorName,
+			"monitor": monitor.FullPath,
 			"thread":  "F5",
-			"type":    vs.Monitor.Type,
+			"type":    monitor.MonitorType,
 		}).Debug("Updating a monitor in the state cache")
 		for idx, f5monitor := range f5State.Monitors {
 			if monitorName == f5monitor.Name {
@@ -778,9 +794,9 @@ func addOrChangeMonitor(vs KsVirtualServer) error {
 		}
 	} else {
 		log.WithFields(log.Fields{
-			"monitor": monitorName,
+			"monitor": monitor.FullPath,
 			"thread":  "F5",
-			"type":    vs.Monitor.Type,
+			"type":    monitor.MonitorType,
 		}).Debug("Adding a monitor to the state cache")
 		f5State.Monitors = append(f5State.Monitors, *monitor)
 	}
@@ -985,9 +1001,7 @@ func addOrChangeVirtualServer(vs KsVirtualServer) error {
 		ipDest = "0.0.0.0"
 	}
 
-	vsNewIP := strings.Replace(ipDest, "10.226.197", "10.226.195", 1) // A temporary thing while working in the lab to use existing ingress on new network
-
-	vsDestination := fmt.Sprintf("/%s/%s%%%s:%d", globalConfig.Partition, vsNewIP, globalConfig.RouteDomain, vs.Port)
+	vsDestination := fmt.Sprintf("/%s/%s%%%s:%d", globalConfig.Partition, ipDest, globalConfig.RouteDomain, vs.Port)
 
 	if vsDestination != vsConfig.Destination {
 		tmpStr := addPreField(existingFound, "Destination", vsConfig.Destination)
@@ -1339,9 +1353,7 @@ func addOrChangeVSRedirect(vs KsVirtualServer) error {
 		ipDest = "0.0.0.0"
 	}
 
-	vsNewIP := strings.Replace(ipDest, "10.226.197", "10.226.195", 1) // A temporary thing while working in the lab to use existing ingress on new network
-
-	vsDestination := fmt.Sprintf("/%s/%s%%%s:80", globalConfig.Partition, vsNewIP, globalConfig.RouteDomain)
+	vsDestination := fmt.Sprintf("/%s/%s%%%s:80", globalConfig.Partition, ipDest, globalConfig.RouteDomain)
 
 	if vsDestination != vsConfig.Destination {
 		tmpStr := addPreField(existingFound, "Destination", vsConfig.Destination)
@@ -1538,7 +1550,7 @@ func deleteMonitor(monitor bigip.Monitor) error {
 		if pool.Monitor == monitor.FullPath {
 
 			log.WithFields(log.Fields{
-				"monitor": monitor.Name,
+				"monitor": monitor.FullPath,
 				"pool":    pool.Name,
 				"thread":  "F5",
 			}).Info("Removing a monitor reference ****TODO****")
@@ -1548,8 +1560,9 @@ func deleteMonitor(monitor bigip.Monitor) error {
 	// Call the F5 to delete the monitor
 
 	log.WithFields(log.Fields{
-		"monitor": monitor.Name,
+		"monitor": monitor.FullPath,
 		"thread":  "F5",
+		"type":    monitor.MonitorType,
 	}).Info("Removing a monitor from the F5")
 
 	if err := f5.DeleteMonitor(monitor.FullPath, monitor.MonitorType); err != nil {
@@ -1559,8 +1572,8 @@ func deleteMonitor(monitor bigip.Monitor) error {
 	// Remove it from the array of monitors in the F5 state cache
 
 	log.WithFields(log.Fields{
-		"node":   monitor.Name,
-		"thread": "F5",
+		"monitor": monitor.FullPath,
+		"thread":  "F5",
 	}).Debug("Removing a monitor from the state cache")
 
 	for idx, stateMonitor := range f5State.Monitors {
@@ -1605,8 +1618,8 @@ func deleteNode(node bigip.Node) error {
 				splitString := strings.Split(poolMember.FullPath, ":")
 				if len(splitString) < 2 {
 					log.WithFields(log.Fields{
-						"pool":   pool.Name,
 						"member": poolMember.FullPath,
+						"pool":   pool.FullPath,
 						"thread": "F5",
 					}).Debug("A pool member isn't in <node>:<port> format. Skipping it")
 					continue
@@ -1619,8 +1632,8 @@ func deleteNode(node bigip.Node) error {
 						Partition: globalConfig.Partition,
 					}
 					log.WithFields(log.Fields{
-						"pool":   pool.Name,
 						"member": poolMember.Name,
+						"pool":   pool.FullPath,
 						"thread": "F5",
 					}).Info("Removing a pool member from the F5")
 					if err := f5.RemovePoolMember(pool.FullPath, poolMemberConfig); err != nil {
@@ -1629,7 +1642,7 @@ func deleteNode(node bigip.Node) error {
 
 					log.WithFields(log.Fields{
 						"member": poolMember.Name,
-						"pool":   pool.Name,
+						"pool":   pool.FullPath,
 						"thread": "F5",
 					}).Debug("Removing a pool member from the state cache")
 					newPoolMembers := []bigip.PoolMember{}
@@ -1660,7 +1673,7 @@ func deleteNode(node bigip.Node) error {
 	// Remove it from the array of nodes in the F5 state cache
 
 	log.WithFields(log.Fields{
-		"node":   node.Name,
+		"node":   node.FullPath,
 		"thread": "F5",
 	}).Debug("Removing a node from the state cache")
 
@@ -1709,7 +1722,7 @@ func deletePool(pool bigip.Pool) error {
 	// Call the F5 to delete the pool
 
 	log.WithFields(log.Fields{
-		"pool":   pool.Name,
+		"pool":   pool.FullPath,
 		"thread": "F5",
 	}).Info("Removing a pool from the F5")
 
@@ -1720,7 +1733,7 @@ func deletePool(pool bigip.Pool) error {
 	// Remove it from the array of pools in the F5 state cache
 
 	log.WithFields(log.Fields{
-		"pool":   pool.Name,
+		"pool":   pool.FullPath,
 		"thread": "F5",
 	}).Debug("Removing a pool from the state cache")
 
@@ -1749,7 +1762,7 @@ func deleteVirtualServer(vs bigip.VirtualServer) error {
 
 	log.WithFields(log.Fields{
 		"thread":        "F5",
-		"virtualServer": vs.Name,
+		"virtualServer": vs.FullPath,
 	}).Info("Removing a virtual server from the F5")
 
 	if err := f5.DeleteVirtualServer(vs.FullPath); err != nil {
@@ -1760,7 +1773,7 @@ func deleteVirtualServer(vs bigip.VirtualServer) error {
 
 	log.WithFields(log.Fields{
 		"thread":        "F5",
-		"virtualServer": vs.Name,
+		"virtualServer": vs.FullPath,
 	}).Debug("Removing a virtual server from the state cache")
 
 	for idx, stateVS := range f5State.Virtuals {
@@ -1900,49 +1913,50 @@ func applyF5Diffs(k8sState KubernetesState) error {
 
 func buildCurrentLTMState() error {
 
-	var f5_user, f5_password, f5_host string
+	log.WithFields(log.Fields{
+		"thread": "F5",
+	}).Info("Refreshing local state cache")
 
 	var err error
-
-	if f5_user = os.Getenv("F5_USER"); f5_user == "" {
-		return fmt.Errorf("F5_USER environment variable must be set")
-	}
-
-	if f5_password = os.Getenv("F5_PASSWORD"); f5_password == "" {
-		return fmt.Errorf("F5_PASSWORD environment variable must be set")
-	}
-
-	if f5_host = os.Getenv("F5_HOST"); f5_host == "" {
-		return fmt.Errorf("F5_HOST environment variable must be set")
-	}
-
-	f5, err = bigip.NewTokenSession(f5_host, f5_user, f5_password, "tmos", &bigip.ConfigOptions{})
-
+	f5, err = bigip.NewTokenSession(globalConfig.F5Host, globalConfig.F5User, globalConfig.F5Pass, "tmos", &bigip.ConfigOptions{})
 	if err != nil {
 		log.Debug("Failed to get token")
 		return err
 	}
 
-	log.Debug("Connected to F5")
-
+	log.WithFields(log.Fields{
+		"partition": globalConfig.Partition,
+		"thread":    "F5",
+	}).Debug("Retrieving all virtual servers in the partition")
 	virtualServers, err := f5.VirtualServersForPartition(globalConfig.Partition)
 	if err != nil {
-		log.Debug("Failed to retrieve F5 virtual server information")
 		return err
 	}
 
+	log.WithFields(log.Fields{
+		"partition": globalConfig.Partition,
+		"thread":    "F5",
+	}).Debug("Retrieving all pools in the partition")
 	pools, err := f5.PoolsForPartition(globalConfig.Partition)
 	if err != nil {
 		log.Debug("Failed to retrieve F5 pool information")
 		return err
 	}
 
+	log.WithFields(log.Fields{
+		"partition": globalConfig.Partition,
+		"thread":    "F5",
+	}).Debug("Retrieving all monitors from the partition")
 	monitors, err := f5.MonitorsForPartition(globalConfig.Partition)
 	if err != nil {
 		log.Debug("Failed to retrieve F5 monitor information")
 		return err
 	}
 
+	log.WithFields(log.Fields{
+		"partition": globalConfig.Partition,
+		"thread":    "F5",
+	}).Debug("Retrieving all nodes from the partition")
 	nodes, err := f5.NodesForPartition(globalConfig.Partition)
 	if err != nil {
 		log.Debug("Failed to retrieve F5 node information")
@@ -1969,7 +1983,7 @@ func buildCurrentLTMState() error {
 					log.WithFields(log.Fields{
 						"thread":        "F5",
 						"virtualServer": virtualServer.Name,
-					}).Debug("Found a virtual server on the F5")
+					}).Debug("Adding a virtual server to the state cache")
 					f5State.Virtuals = append(f5State.Virtuals, virtualServer)
 					break
 				}
@@ -1996,7 +2010,7 @@ func buildCurrentLTMState() error {
 								"pool":       pool.Name,
 								"poolMember": pm.Name,
 								"thread":     "F5",
-							}).Debug("Found a pool member on the F5")
+							}).Debug("Adding a pool member to the state cache")
 						}
 						pool.Members = &poolMembers.PoolMembers
 					}
@@ -2026,7 +2040,7 @@ func buildCurrentLTMState() error {
 				log.WithFields(log.Fields{
 					"monitor": monitor.Name,
 					"thread":  "F5",
-				}).Debug("Found a monitor on the F5")
+				}).Debug("Adding a monitor to the state cache")
 				f5State.Monitors = append(f5State.Monitors, monitor)
 				//					break
 				//				}
@@ -2043,7 +2057,7 @@ func buildCurrentLTMState() error {
 					log.WithFields(log.Fields{
 						"node":   node.Name,
 						"thread": "F5",
-					}).Debug("Found a node on the F5")
+					}).Debug("Adding a node to the state cache")
 					f5State.Nodes = append(f5State.Nodes, node)
 					break
 				}
@@ -2090,6 +2104,10 @@ type KsVirtualServer struct {
 type KubernetesState []KsVirtualServer
 
 func getKubernetesState() (KubernetesState, error) {
+
+	log.WithFields(log.Fields{
+		"thread": "Kubernetes",
+	}).Info("Refreshing local state cache")
 
 	var ks KubernetesState
 
@@ -2367,10 +2385,14 @@ func main() {
 
 	log.WithFields(log.Fields{
 		"version": version,
-	}).Infof("F5-ingress-ctlr starting")
+	}).Info("F5-ingress-ctlr starting")
 	// initialize the Kubernetes connection
 
-	log.SetLevel(log.DebugLevel)
+	if ok := os.Getenv("DEBUG"); ok != "" {
+		log.SetLevel(log.DebugLevel)
+	} else
+		log.SetLevel(log.InfoLevel)
+	}
 
 	err := initKubernetes()
 	if err != nil || clientset == nil {
@@ -2380,42 +2402,86 @@ func main() {
 	}
 
 	globalConfig.Partition = "k8s-auto-ny2"
+	if globalConfig.F5Host = os.Getenv("F5_HOST"); globalConfig.F5Host == "" {
+		log.Error("The environment variable F5_HOST must be set")
+		os.Exit(1)
+	}
+	log.WithFields(log.Fields{
+		"host": globalConfig.F5Host,
+	}).Info("Configured an F5 host address")
+
 	if globalConfig.RouteDomain = os.Getenv("F5_ROUTE_DOMAIN"); globalConfig.RouteDomain == "" {
 		log.Error("The environment variable F5_ROUTE_DOMAIN must be set")
 		os.Exit(1)
 	}
+	log.WithFields(log.Fields{
+		"routeDomain": globalConfig.RouteDomain,
+	}).Info("Configured an F5 route domain")
+
 	globalConfig.IbActive = false
-	if globalConfig.VIPCIDR = os.Getenv("F5_VIP_CIDR"); globalConfig.VIPCIDR == "" {
-		log.Info("The CIDR range for the F5 VIP network is not set, disabling Infoblox integration")
+	if globalConfig.VIPCIDR = os.Getenv("F5_VIP_CIDR"); globalConfig.VIPCIDR != "" {
+		log.WithFields(log.Fields{
+			"subnet": globalConfig.VIPCIDR,
+		}).Info("Configured an F5 VIP CIDR range")
 	}
 
-	if globalConfig.IbHost = os.Getenv("INFOBLOX_HOST"); globalConfig.IbHost == "" {
-		log.Info("The environment variable INFOBLOX_HOST is missing, disabling Infoblox integration")
+	if globalConfig.IbHost = os.Getenv("INFOBLOX_HOST"); globalConfig.IbHost != "" {
+		log.WithFields(log.Fields{
+			"host": globalConfig.IbHost,
+		}).Info("Configured an Infoblox host address")
 	}
 
-	if globalConfig.IbUser = os.Getenv("INFOBLOX_USER"); globalConfig.IbUser == "" {
-		log.Info("The environment variable INFOBLOX_USER is missing, disabling Infoblox integration")
+	f5user_b, err := ioutil.ReadFile("/secret/f5_user")
+	if err != nil {
+		log.Error("The secret f5_user could not be read from the secret volume")
+		log.Error("Make sure the secrets are mounted at /secret on the container")
+		log.Error(err.Error())
+		os.Exit(1)
+	}
+	globalConfig.F5User = string(f5user_b)
+
+	f5pass_b, err := ioutil.ReadFile("/secret/f5_pass")
+	if err != nil {
+		log.Error("The secret f5_pass could not be read from the secret volume")
+		log.Error("Make sure the secrets are mounted at /secret on the container")
+		log.Error(err.Error())
+		os.Exit(1)
+	}
+	globalConfig.F5Pass = string(f5pass_b)
+	log.WithFields(log.Fields{
+		"username": globalConfig.F5User,
+	}).Info("Configured F5 credentials")
+
+	ibUser_b, err := ioutil.ReadFile("/secret/infoblox_user")
+	if err == nil {
+		globalConfig.IbUser = string(ibUser_b)
 	}
 
-	if globalConfig.IbPass = os.Getenv("INFOBLOX_PASSWORD"); globalConfig.IbPass == "" {
-		log.Info("The environment variable INFOBLOX_PASSWORD is missing, disabling Infoblox integration")
+	ibPass_b, err := ioutil.ReadFile("/secret/infoblox_pass")
+	if err == nil {
+		globalConfig.IbPass = string(ibPass_b)
 	}
+
+	if globalConfig.IbUser != "" && globalConfig.IbPass != "" {
+		log.WithFields(log.Fields{
+			"username": globalConfig.IbUser,
+		}).Info("Configured Infoblox credentials")
+	}
+
+	globalConfig.IbActive = false
 
 	// clear F5 LTM state
 
 	for true {
 
-		log.Info("Reading full dump from Infoblox, refreshing state cache")
-		globalConfig.IbActive = false
 		err = ibRefreshState()
 		if err != nil {
-			log.Error("Could not fetch current state from the Infoblox")
+			log.Error("Could not refresh the current state from the Infoblox")
 			log.Error(err.Error())
 			time.Sleep(30 * time.Second)
 			continue
 		}
 
-		log.Info("Reading full partition dump from F5, refreshing state cache")
 		f5State.Virtuals = []bigip.VirtualServer{}
 		f5State.Pools = []bigip.Pool{}
 		f5State.Monitors = []bigip.Monitor{}
