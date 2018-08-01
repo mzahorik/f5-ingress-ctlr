@@ -2401,7 +2401,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	globalConfig.Partition = "k8s-auto-ny2"
+	if globalConfig.Partition = os.Getenv("F5_PARTITION"); globalConfig.Partition == "" {
+		log.Error("The environment variable F5_PARTITION must be set")
+		os.Exit(1)
+	}
 	if globalConfig.F5Host = os.Getenv("F5_HOST"); globalConfig.F5Host == "" {
 		log.Error("The environment variable F5_HOST must be set")
 		os.Exit(1)
