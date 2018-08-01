@@ -22,20 +22,25 @@ A sample Kubernetes YAML file can be found in deploy/k8s.  Modify the following 
 
 Variable | Description | Sample Value
 -------- | ----------- | ------------
-F5_HOST | The DNS name/IP address where the F5 BIG-IP answers iControl REST calls | 192.168.1.1
-F5_ROUTE_DOMAIN | The numeric route domain for the virtual IP subnet on the BIG-IP. This will be automatically detected and deprecated in a future release  | 123
-F5_VIP_CIDR | The subnet on the F5 where virtual IP addresses reside | 10.1.123.1/24
-INFOBLOX_HOST | The DNS name/IP address for the Infoblox API. If omitted, the Infoblox integration will be disabled | 192.168.1.100
+DEBUG | Logs will emit detailed debugging information | true
+F5_HOST | The DNS name/IP address of the F5 BIG-IP iControl REST API | 192.168.1.1
+F5_ROUTE_DOMAIN | The numeric route domain for the virtual IP subnet on the BIG-IP. This will be automatically detected, and this environment variable deprecated, in a future release  | 123
+F5_VIP_CIDR | The subnet that will contain the F5 VIP addresses.  If omitted, the Infoblox integration will be disabled | 10.1.123.1/24
+INFOBLOX_HOST | The DNS name/IP address of the Infoblox API. If omitted, the Infoblox integration will be disabled | 192.168.1.100
 
 and then:
 
-`kubectl create secret generic f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password>
-kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>`
+```
+kubectl create secret generic f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password>
+kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>
+```
 
 if using the Infoblox integration, add in the Infoblox credentials:
 
-`kubectl create secret generic f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password> --from-literal=infoblox_user=<your Infoblox username> --from-literal=infoblox_pass=<your Infoblox password>
-kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>`
+```
+kubectl create secret generic f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password> --from-literal=infoblox_user=<your Infoblox username> --from-literal=infoblox_pass=<your Infoblox password>
+kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>
+```
 
 # Usage
 
@@ -54,6 +59,9 @@ If these annotations exist, upon creating a virtual server on the BIG-IP, an Inf
 
 A custom attribute named "F5-IPAM" must be present on the Infoblox. This can be set under Administration -> Extensible Attributes.  The controller will only add records with "F5-IPAM" set to "true", and will only delete records within the F5_VIP_CIDR subnet with "F5-IPAM" set to "true".
 
+To be documented:
+
+```
 virtual-server.f5.com/balance
 virtual-server.f5.com/defaultPersist
 virtual-server.f5.com/fallbackPersist
@@ -64,7 +72,7 @@ virtual-server.f5.com/ip
 virtual-server.f5.com/rules
 virtual-server.f5.com/serverssl
 virtual-server.f5.com/ssl-redirect
-
+```
 # Copyright
 
 Copyright (c) 2018, Matt Zahorik <matt.zahorik@gmail.com>
