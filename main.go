@@ -198,7 +198,7 @@ func ibRefreshState() error {
 
 	log.WithFields(log.Fields{
 		"thread": "Infoblox",
-	}).Info("Refreshing local state cache")
+	}).Info("Refreshing the local state cache")
 
 	req, err := http.NewRequest("GET", u.String(), nil)
 	if err != nil {
@@ -700,7 +700,9 @@ func addOrChangeMonitor(vs KsVirtualServer) error {
 		updated = true
 	}
 
-	if vs.Monitor.Send != monitorConfig.SendString {
+	tmp := strings.Replace(vs.Monitor.Send, "\r", "\\r", -1)
+	escapedSend := strings.Replace(tmp, "\n", "\\n", -1)
+	if escapedSend != monitorConfig.SendString {
 		if !((vs.Monitor.Send == "" || vs.Monitor.Send == "GET /\r\n") && monitorConfig.SendString == "GET /\\r\\n") {
 			tmpStr := addPreField(existingFound, "SendString", monitorConfig.SendString)
 			monitorConfig.SendString = vs.Monitor.Send
@@ -779,7 +781,7 @@ func addOrChangeMonitor(vs KsVirtualServer) error {
 	// has it.
 
 	monitor.MonitorType = vs.Monitor.Type
-	
+
 	if existingFound {
 		log.WithFields(log.Fields{
 			"monitor": monitor.FullPath,
@@ -1915,7 +1917,7 @@ func buildCurrentLTMState() error {
 
 	log.WithFields(log.Fields{
 		"thread": "F5",
-	}).Info("Refreshing local state cache")
+	}).Info("Refreshing the local state cache")
 
 	var err error
 	f5, err = bigip.NewTokenSession(globalConfig.F5Host, globalConfig.F5User, globalConfig.F5Pass, "tmos", &bigip.ConfigOptions{})
@@ -2107,7 +2109,7 @@ func getKubernetesState() (KubernetesState, error) {
 
 	log.WithFields(log.Fields{
 		"thread": "Kubernetes",
-	}).Info("Refreshing local state cache")
+	}).Info("Refreshing the local state cache")
 
 	var ks KubernetesState
 
@@ -2122,50 +2124,6 @@ func getKubernetesState() (KubernetesState, error) {
 		return ks, err
 	}
 	log.Debug("Successfully fetched all Service objects from Kubernetes")
-
-	// Temporarily here, loop through the Infoblox IP addresses, updating the IP of any
-	// objects that have Infoblox entries.
-
-	for _, iba := range ibAddrs {
-		for _, ing := range ingresses.Items {
-			hostname, ok := ing.ObjectMeta.Annotations["infoblox-ipam/hostname"]
-			if !ok {
-				continue
-			}
-			dynIP, ok := ing.ObjectMeta.Annotations["infoblox-ipam/ip-allocation"]
-			if !ok {
-				continue
-			}
-			if dynIP != "dynamic" {
-				continue
-			}
-			if hostname != iba.Name {
-				continue
-			}
-			// If we make it here, we have an ingress requesting a dynamic IP, and we
-			// have a desired hostname that matches this Infoblox IP address record.
-			//
-			// Check that the IP address in the Ingress load balancer status field
-			// matches.  If not, set it and let Kubernetes know about the update.
-
-			if len(ing.Status.LoadBalancer.Ingress) > 0 {
-				if ing.Status.LoadBalancer.Ingress[0].IP == iba.IP {
-					continue // If already set correctly, do not update
-				}
-			}
-			newIP := []v1.LoadBalancerIngress{
-				v1.LoadBalancerIngress{
-					IP: iba.IP,
-				},
-			}
-			ing.Status.LoadBalancer.Ingress = newIP
-			log.Debugf("Updating Ingress %s/%s with IP %s", ing.Namespace, ing.Name, iba.IP)
-			_, err := clientset.ExtensionsV1beta1().Ingresses(ing.Namespace).UpdateStatus(&ing)
-			if err != nil {
-				log.Error(err.Error())
-			}
-		}
-	}
 
 	// Loop through the Ingress objects, building complete virtual server objects
 
@@ -2254,9 +2212,9 @@ func getKubernetesState() (KubernetesState, error) {
 
 		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/serverssl"]; ok == true {
 			vs.ServerSSL = value
-//			if vs.Monitor.Type == "" {
-//				vs.Monitor.Type = "https"
-//			}
+			if vs.Monitor.Type == "" {
+				vs.Monitor.Type = "https"
+			}
 		}
 
 		if vs.Monitor.Type == "" {
@@ -2372,6 +2330,56 @@ func getKubernetesState() (KubernetesState, error) {
 		// Attach the new virtual server to the slice
 
 		ks = append(ks, vs)
+
+		// Update the IP status field in Kubernetes if we can find a matching
+		// F5 virtual server object with an IP assigned
+
+		f5VSName := f5VirtualServerName(vs)
+
+		for _, f5vs := range f5State.Virtuals {
+
+			if f5VSName == f5vs.Name {
+
+				// We found a virtual server that matches, see if there's a valid IP address
+				// set on it
+
+				tmp := strings.Split(f5vs.Destination, "/")
+				tmp = strings.Split(tmp[2], "%")
+				tmp = strings.Split(tmp[0], ":")
+				f5IpAddr := tmp[0]
+
+				if f5IpAddr == "" || f5IpAddr == "0.0.0.0" {
+					break
+				}
+
+				// Ok, we have a valid IP address, if the F5 IP address differs from the
+				// IP address already set on the Ingress, change the ingress status to
+				// to the IP address of the virtual server on the F5.
+
+				if len(ingress.Status.LoadBalancer.Ingress) > 0 {
+					if ingress.Status.LoadBalancer.Ingress[0].IP == f5IpAddr {
+						break
+					}
+				}
+				newStatus := []v1.LoadBalancerIngress{
+					v1.LoadBalancerIngress{
+						IP: f5IpAddr,
+					},
+				}
+				ingress.Status.LoadBalancer.Ingress = newStatus
+				log.WithFields(log.Fields{
+					"ingress":   vs.Name,
+					"ip":        f5IpAddr,
+					"namespace": vs.Namespace,
+					"thread":    "Kubernetes",
+				}).Info("Updating an ingress with the IP address from the F5")
+				_, err := clientset.ExtensionsV1beta1().Ingresses(ingress.Namespace).UpdateStatus(&ingress)
+				if err != nil {
+					log.Error(err.Error())
+				}
+				break
+			}
+		}
 	}
 
 	return ks, nil
