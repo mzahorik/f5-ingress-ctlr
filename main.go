@@ -2254,9 +2254,9 @@ func getKubernetesState() (KubernetesState, error) {
 
 		if value, ok := ingress.ObjectMeta.Annotations["virtual-server.f5.com/serverssl"]; ok == true {
 			vs.ServerSSL = value
-			if vs.Monitor.Type == "" {
-				vs.Monitor.Type = "https"
-			}
+//			if vs.Monitor.Type == "" {
+//				vs.Monitor.Type = "https"
+//			}
 		}
 
 		if vs.Monitor.Type == "" {
