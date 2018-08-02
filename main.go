@@ -2411,11 +2411,25 @@ func main() {
 
 	refreshInterval := 900 // default is 15 minutes
         if refreshStr := os.Getenv("REFRESH_INTERVAL"); refreshStr  != "" {
-		refreshInterval = strconv.Atoi(refreshStr)
-		if refreshInterval == 0 {
-			refreshInterval == 900
+		val, err := strconv.Atoi(refreshStr)
+		if err == nil {
+			refreshInterval = val * 60
 		}
 	}
+	log.WithFields(log.Fields{
+		"interval": refreshInterval/60,
+	}).Info("Full refresh interval (minutes)")
+
+	k8sPollInterval := 15 // default is 15 seconds
+	if refreshStr := os.Getenv("K8S_POLL_INTERVAL"); refreshStr != "" {
+		val, err := strconv.Atoi(refreshStr)
+		if err == nil {
+			k8sPollInterval = val
+		}
+	}
+	log.WithFields(log.Fields{
+		"interval": k8sPollInterval,
+	}).Info("Kubernetes polling interval (seconds)")
 
 	if globalConfig.Partition = os.Getenv("BIGIP_PARTITION"); globalConfig.Partition == "" {
 		log.Error("The environment variable BIGIP_PARTITION must be set")
@@ -2517,7 +2531,7 @@ func main() {
 		// Execute 60 times, with 15 seconds in between, so full F5 state is pulled every
 		// 15 minutes
 
-		for i := 0; i < 60; i++ {
+		for i := 0; i < (refreshInterval / k8sPollInterval); i++ {
 			desiredState, err := getKubernetesState()
 			if err != nil {
 				log.Error("Could not fetch desired state from Kubernetes")
@@ -2555,7 +2569,7 @@ func main() {
 					}
 				}
 			}
-			time.Sleep(15 * time.Second)
+			time.Sleep(time.Duration(k8sPollInterval) * time.Second)
 		}
 	}
 }

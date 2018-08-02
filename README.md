@@ -28,7 +28,8 @@ DEBUG | Logs will contain detailed debugging information.  Any value can be used
 F5_ROUTE_DOMAIN | The numeric route domain for the virtual IP subnet on the BIG-IP. This will be automatically detected, and this environment variable deprecated, in a future release  | 123
 INFOBLOX_SUBNET | The subnet, in CIDR notation, that the controller will allocate addresses from.  If omitted, the Infoblox integration will be disabled | 10.1.123.1/24
 INFOBLOX_HOST | The DNS name/IP address of the Infoblox API. If omitted, the Infoblox integration will be disabled | 192.168.1.100
-REFRESH_INTERVAL | After REFRESH_INTERVAL minutes the controller will discard it's internal state and get a full list of objects from the BIG-IP, Infoblox, and Kubernetes.  If omitted, the controller defaults to 15 minutes | 600
+K8S_POLL_INTERVAL | Number of seconds between queries to Kubernetes to get full list of ingresses and pods.  This will be deprecated in a future release of the code.  If omitted, the controller defaults to 15 seconds. | 5
+REFRESH_INTERVAL | After REFRESH_INTERVAL minutes the controller will discard it's internal state and get a full list of objects from the BIG-IP, Infoblox, and Kubernetes.  If omitted, the controller defaults to 15 minutes | 30
 
 and then:
 
