@@ -2409,12 +2409,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	if globalConfig.Partition = os.Getenv("F5_PARTITION"); globalConfig.Partition == "" {
-		log.Error("The environment variable F5_PARTITION must be set")
+	refreshInterval := 900 // default is 15 minutes
+        if refreshStr := os.Getenv("REFRESH_INTERVAL"); refreshStr  != "" {
+		refreshInterval = strconv.Atoi(refreshStr)
+		if refreshInterval == 0 {
+			refreshInterval == 900
+		}
+	}
+
+	if globalConfig.Partition = os.Getenv("BIGIP_PARTITION"); globalConfig.Partition == "" {
+		log.Error("The environment variable BIGIP_PARTITION must be set")
 		os.Exit(1)
 	}
-	if globalConfig.F5Host = os.Getenv("F5_HOST"); globalConfig.F5Host == "" {
-		log.Error("The environment variable F5_HOST must be set")
+	if globalConfig.F5Host = os.Getenv("BIGIP_HOST"); globalConfig.F5Host == "" {
+		log.Error("The environment variable BIGIP_HOST must be set")
 		os.Exit(1)
 	}
 	log.WithFields(log.Fields{
@@ -2430,10 +2438,10 @@ func main() {
 	}).Info("Configured an F5 route domain")
 
 	globalConfig.IbActive = false
-	if globalConfig.VIPCIDR = os.Getenv("F5_VIP_CIDR"); globalConfig.VIPCIDR != "" {
+	if globalConfig.VIPCIDR = os.Getenv("INFOBLOX_SUBNET"); globalConfig.VIPCIDR != "" {
 		log.WithFields(log.Fields{
 			"subnet": globalConfig.VIPCIDR,
-		}).Info("Configured an F5 VIP CIDR range")
+		}).Info("Configured an Infoblox subnet for IP allocations")
 	}
 
 	if globalConfig.IbHost = os.Getenv("INFOBLOX_HOST"); globalConfig.IbHost != "" {
