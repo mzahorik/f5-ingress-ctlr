@@ -22,11 +22,14 @@ A sample Kubernetes YAML file can be found in deploy/k8s.  Modify the following 
 
 Variable | Description | Sample Value
 -------- | ----------- | ------------
-DEBUG | Logs will emit detailed debugging information | true
-F5_HOST | The DNS name/IP address of the F5 BIG-IP iControl REST API | 192.168.1.1
+BIGIP_HOST | The DNS name/IP address of the F5 BIG-IP iControl REST API.  This field is required. | 192.168.1.1
+BIGIP_PARTITION | The administrative partition on the BIG-IP device.  This field is required. | kubernetes
+DEBUG | Logs will contain detailed debugging information.  Any value can be used, the environment variable only needs to exist. Optional. | true
 F5_ROUTE_DOMAIN | The numeric route domain for the virtual IP subnet on the BIG-IP. This will be automatically detected, and this environment variable deprecated, in a future release  | 123
-F5_VIP_CIDR | The subnet that will contain the F5 VIP addresses.  If omitted, the Infoblox integration will be disabled | 10.1.123.1/24
+INFOBLOX_SUBNET | The subnet, in CIDR notation, that the controller will allocate addresses from.  If omitted, the Infoblox integration will be disabled | 10.1.123.1/24
 INFOBLOX_HOST | The DNS name/IP address of the Infoblox API. If omitted, the Infoblox integration will be disabled | 192.168.1.100
+K8S_POLL_INTERVAL | Number of seconds between queries to Kubernetes to get full list of ingresses and pods.  This will be deprecated in a future release of the code.  If omitted, the controller defaults to 15 seconds. | 5
+REFRESH_INTERVAL | After REFRESH_INTERVAL minutes the controller will discard it's internal state and get a full list of objects from the BIG-IP, Infoblox, and Kubernetes.  If omitted, the controller defaults to 15 minutes | 30
 
 and then:
 
@@ -35,7 +38,7 @@ kubectl create secret generic f5-ingress-ctlr-creds --from-literal=f5_user=<your
 kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>
 ```
 
-if using the Infoblox integration, add in the Infoblox credentials:
+if you're using the Infoblox integration, add in the Infoblox credentials:
 
 ```
 kubectl create secret generic f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password> --from-literal=infoblox_user=<your Infoblox username> --from-literal=infoblox_pass=<your Infoblox password>
@@ -61,18 +64,19 @@ A custom attribute named "F5-IPAM" must be present on the Infoblox. This can be 
 
 To be documented:
 
-```
-virtual-server.f5.com/balance
-virtual-server.f5.com/defaultPersist
-virtual-server.f5.com/fallbackPersist
-virtual-server.f5.com/health
-virtual-server.f5.com/http-port
-virtual-server.f5.com/https-port
-virtual-server.f5.com/ip
-virtual-server.f5.com/rules
-virtual-server.f5.com/serverssl
-virtual-server.f5.com/ssl-redirect
-```
+Annotations | Default Value | Valid Values | Sample Value
+----------- | ------------- | ------------ | ------------
+virtual-server.f5.com/balance | none | https://support.f5.com/kb/en-us/products/big-ip_ltm/manuals/product/ltm-concepts-11-4-0/5.html | round-robin
+virtual-server.f5.com/defaultPersist | none | A valid pre-configured persistence profile | /Common/ssl
+virtual-server.f5.com/fallbackPersist | none | A valid pre-configured persistence profile | /Common/source_addr
+virtual-server.f5.com/health | na | na | na
+virtual-server.f5.com/http-port | na | na | na
+virtual-server.f5.com/https-port | na | na | na
+virtual-server.f5.com/ip | na | na | na
+virtual-server.f5.com/rules | na | na | na
+virtual-server.f5.com/serverssl | na | na | na
+virtual-server.f5.com/ssl-redirect | na | na | na
+
 # Copyright
 
 Copyright (c) 2018, Matt Zahorik <matt.zahorik@gmail.com>
