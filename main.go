@@ -2464,7 +2464,7 @@ func main() {
 		}).Info("Configured an Infoblox host address")
 	}
 
-	f5user_b, err := ioutil.ReadFile("/secret/f5_user")
+	f5user_b, err := ioutil.ReadFile("/secret/bigip_user")
 	if err != nil {
 		log.Error("The secret f5_user could not be read from the secret volume")
 		log.Error("Make sure the secrets are mounted at /secret on the container")
@@ -2473,7 +2473,7 @@ func main() {
 	}
 	globalConfig.F5User = string(f5user_b)
 
-	f5pass_b, err := ioutil.ReadFile("/secret/f5_pass")
+	f5pass_b, err := ioutil.ReadFile("/secret/bigip_pass")
 	if err != nil {
 		log.Error("The secret f5_pass could not be read from the secret volume")
 		log.Error("Make sure the secrets are mounted at /secret on the container")
