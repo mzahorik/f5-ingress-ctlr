@@ -127,7 +127,7 @@ func f5PoolMemberName(vs KsVirtualServer, memberIndex int) string {
 
 	portString := strconv.FormatInt(int64(vs.Members[memberIndex].Port), 10)
 
-	mbrName := vs.Namespace + "_" + vs.Members[memberIndex].Name + ":" + portString
+	mbrName := vs.Members[memberIndex].IP + ":" + portString
 
 	return mbrName
 }
@@ -141,7 +141,7 @@ func f5MonitorName(vs KsVirtualServer) string {
 
 func f5NodeName(vs KsVirtualServer, memberIndex int) string {
 
-	nName := vs.Namespace + "_" + vs.Members[memberIndex].Name
+	nName := vs.Members[memberIndex].IP
 
 	return nName
 }
