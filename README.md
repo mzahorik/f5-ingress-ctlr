@@ -34,14 +34,14 @@ REFRESH_INTERVAL | After REFRESH_INTERVAL minutes the controller will discard it
 and then:
 
 ```
-kubectl create secret generic f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password>
+kubectl create secret generic f5-ingress-ctlr-creds --from-literal=bigip_user=<your BIG-IP username> --from-literal=bigip_pass=<your BIG-IP password>
 kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>
 ```
 
 if you're using the Infoblox integration, add in the Infoblox credentials:
 
 ```
-kubectl create secret generic f5-ingress-ctlr-creds --from-literal=f5_user=<your F5 username> --from-literal=f5_pass=<your F5 password> --from-literal=infoblox_user=<your Infoblox username> --from-literal=infoblox_pass=<your Infoblox password>
+kubectl create secret generic f5-ingress-ctlr-creds --from-literal=bigip_user=<your BIG-IP username> --from-literal=bigip_pass=<your BIG-IP password> --from-literal=infoblox_user=<your Infoblox username> --from-literal=infoblox_pass=<your Infoblox password>
 kubectl apply -f deploy/k8s/sample-deployment -n <your namespace if not default>
 ```
 
@@ -58,9 +58,9 @@ infoblox-ipam/ip-allocation | none | dynamic | dynamic
 
 These annotations control the Infoblox IP address allocation on a per-Ingress basis.  Both annotations must be set, otherwise they are both ignored.  If these annotations are unset, see virtual-server.f5.com/ip.
 
-If these annotations exist, upon creating a virtual server on the BIG-IP, an Infoblox host record will be created on the next available IP in the subnet specified by the F5_VIP_CIDR environment variable.  Once the virtual server on the BIG-IP is removed, through removal of the Ingress object in Kubernetes, the host entry in the Infoblox will be removed.
+If these annotations exist, upon creating a virtual server on the BIG-IP, an Infoblox host record will be created on the next available IP in the subnet specified by the INFOBLOX_SUBNET environment variable.  Once the virtual server on the BIG-IP is removed, through removal of the Ingress object in Kubernetes, the host entry in the Infoblox will be removed.
 
-A custom attribute named "F5-IPAM" must be present on the Infoblox. This can be set under Administration -> Extensible Attributes.  The controller will only add records with "F5-IPAM" set to "true", and will only delete records within the F5_VIP_CIDR subnet with "F5-IPAM" set to "true".
+A custom attribute named "F5-IPAM" must be present on the Infoblox. This can be set under Administration -> Extensible Attributes.  The controller will only add records with "F5-IPAM" set to "true", and will only delete records within the INFOBLOX_SUBNET with "F5-IPAM" set to "true".
 
 To be documented:
 
