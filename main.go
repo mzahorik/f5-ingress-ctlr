@@ -2410,14 +2410,14 @@ func main() {
 	}
 
 	refreshInterval := 900 // default is 15 minutes
-        if refreshStr := os.Getenv("REFRESH_INTERVAL"); refreshStr  != "" {
+	if refreshStr := os.Getenv("REFRESH_INTERVAL"); refreshStr != "" {
 		val, err := strconv.Atoi(refreshStr)
 		if err == nil {
 			refreshInterval = val * 60
 		}
 	}
 	log.WithFields(log.Fields{
-		"interval": refreshInterval/60,
+		"interval": refreshInterval / 60,
 	}).Info("Full refresh interval (minutes)")
 
 	k8sPollInterval := 15 // default is 15 seconds
@@ -2530,8 +2530,16 @@ func main() {
 
 		// Execute 60 times, with 15 seconds in between, so full F5 state is pulled every
 		// 15 minutes
-
 		for i := 0; i < (refreshInterval / k8sPollInterval); i++ {
+			// refresh auth token for 5 minutes
+			err := f5.RefreshTokenSession(time.Duration(300) * time.Second)
+			if err != nil {
+				log.Error("Could not refresh F5 session token")
+				log.Error(err.Error())
+				// crash due to inability to refresh or initialize auth token
+				os.Exit(1)
+			}
+
 			desiredState, err := getKubernetesState()
 			if err != nil {
 				log.Error("Could not fetch desired state from Kubernetes")
