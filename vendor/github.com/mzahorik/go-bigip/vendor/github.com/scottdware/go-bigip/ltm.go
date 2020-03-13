@@ -6,20 +6,6 @@ import (
 	"strings"
 )
 
-// Metadata can be used on (most) objects to attach arbitrary name/value pairs.
-type Metadata struct {
-	AppService string `json:"appService,omitempty"`
-	Name       string `json:"name,omitempty"`
-	Value      string `json:"value,omitempty"`
-	Persist    string `json:"persist,omitempty"`
-}
-
-type Persistence struct {
-	Name      string `json:"name,omitempty"`
-	Partition string `json:"partition,omitempty"`
-	Default   string `json:"tmDefault,omitempty"`
-}
-
 // ServerSSLProfiles
 // Documentation: https://devcentral.f5.com/wiki/iControlREST.APIRef_tm_ltm_profile_server-ssl.ashx
 
@@ -350,22 +336,20 @@ type Nodes struct {
 // Node contains information about each individual node. You can use all
 // of these fields when modifying a node.
 type Node struct {
-	Name            string     `json:"name,omitempty"`
-	AppService      string     `json:"appService,omitempty"`
-	Partition       string     `json:"partition,omitempty"`
-	FullPath        string     `json:"fullPath,omitempty"`
-	Generation      int        `json:"generation,omitempty"`
-	Address         string     `json:"address,omitempty"`
-	ConnectionLimit int        `json:"connectionLimit,omitempty"`
-	DynamicRatio    int        `json:"dynamicRatio,omitempty"`
-	Logging         string     `json:"logging,omitempty"`
-	Monitor         string     `json:"monitor,omitempty"`
-	RateLimit       string     `json:"rateLimit,omitempty"`
-	Ratio           int        `json:"ratio,omitempty"`
-	Session         string     `json:"session,omitempty"`
-	State           string     `json:"state,omitempty"`
-	Description     string     `json:"description,omitempty"`
-	Metadata        []Metadata `json:"metadata,omitempty"`
+	Name            string `json:"name,omitempty"`
+	AppService      string `json:"appService,omitempty"`
+	Partition       string `json:"partition,omitempty"`
+	FullPath        string `json:"fullPath,omitempty"`
+	Generation      int    `json:"generation,omitempty"`
+	Address         string `json:"address,omitempty"`
+	ConnectionLimit int    `json:"connectionLimit,omitempty"`
+	DynamicRatio    int    `json:"dynamicRatio,omitempty"`
+	Logging         string `json:"logging,omitempty"`
+	Monitor         string `json:"monitor,omitempty"`
+	RateLimit       string `json:"rateLimit,omitempty"`
+	Ratio           int    `json:"ratio,omitempty"`
+	Session         string `json:"session,omitempty"`
+	State           string `json:"state,omitempty"`
 	FQDN            struct {
 		AddressFamily string `json:"addressFamily,omitempty"`
 		AutoPopulate  string `json:"autopopulate,omitempty"`
@@ -396,15 +380,12 @@ type DataGroupRecord struct {
 }
 
 type dataGroupDTO struct {
-	Name       string `json:"name,omitempty"`
-	Partition  string `json:"partition,omitempty"`
-	FullPath   string `json:"fullPath,omitempty"`
-	Generation int    `json:"generation,omitempty"`
-	Type       string `json:"type,omitempty"`
-
-	// Records contains a list of DataGroupRecord objects.
-	// `omitempty` tag is removed on purpose. See issue https://github.com/scottdware/go-bigip/issues/90
-	Records []DataGroupRecord `json:"records"`
+	Name       string            `json:"name,omitempty"`
+	Partition  string            `json:"partition,omitempty"`
+	FullPath   string            `json:"fullPath,omitempty"`
+	Generation int               `json:"generation,omitempty"`
+	Type       string            `json:"type,omitempty"`
+	Records    []DataGroupRecord `json:"records,omitempty"`
 }
 
 func (p *DataGroup) MarshalJSON() ([]byte, error) {
@@ -446,31 +427,30 @@ type Pools struct {
 // Pool contains information about each pool. You can use all of these
 // fields when modifying a pool.
 type Pool struct {
-	Name                   string     `json:"name,omitempty"`
-	Description            string     `json:"description,omitempty"`
-	Partition              string     `json:"partition,omitempty"`
-	FullPath               string     `json:"fullPath,omitempty"`
-	Generation             int        `json:"generation,omitempty"`
-	AllowNAT               string     `json:"allowNat,omitempty"`
-	AllowSNAT              string     `json:"allowSnat,omitempty"`
-	IgnorePersistedWeight  string     `json:"ignorePersistedWeight,omitempty"`
-	IPTOSToClient          string     `json:"ipTosToClient,omitempty"`
-	IPTOSToServer          string     `json:"ipTosToServer,omitempty"`
-	LinkQoSToClient        string     `json:"linkQosToClient,omitempty"`
-	LinkQoSToServer        string     `json:"linkQosToServer,omitempty"`
-	LoadBalancingMode      string     `json:"loadBalancingMode,omitempty"`
-	Metadata               []Metadata `json:"metadata,omitempty"`
-	MinActiveMembers       int        `json:"minActiveMembers,omitempty"`
-	MinUpMembers           int        `json:"minUpMembers,omitempty"`
-	MinUpMembersAction     string     `json:"minUpMembersAction,omitempty"`
-	MinUpMembersChecking   string     `json:"minUpMembersChecking,omitempty"`
-	Monitor                string     `json:"monitor,omitempty"`
-	QueueDepthLimit        int        `json:"queueDepthLimit,omitempty"`
-	QueueOnConnectionLimit string     `json:"queueOnConnectionLimit,omitempty"`
-	QueueTimeLimit         int        `json:"queueTimeLimit,omitempty"`
-	ReselectTries          int        `json:"reselectTries,omitempty"`
-	ServiceDownAction      string     `json:"serviceDownAction,omitempty"`
-	SlowRampTime           int        `json:"slowRampTime,omitempty"`
+	Name                   string `json:"name,omitempty"`
+	Description            string `json:"description,omitempty"`
+	Partition              string `json:"partition,omitempty"`
+	FullPath               string `json:"fullPath,omitempty"`
+	Generation             int    `json:"generation,omitempty"`
+	AllowNAT               string `json:"allowNat,omitempty"`
+	AllowSNAT              string `json:"allowSnat,omitempty"`
+	IgnorePersistedWeight  string `json:"ignorePersistedWeight,omitempty"`
+	IPTOSToClient          string `json:"ipTosToClient,omitempty"`
+	IPTOSToServer          string `json:"ipTosToServer,omitempty"`
+	LinkQoSToClient        string `json:"linkQosToClient,omitempty"`
+	LinkQoSToServer        string `json:"linkQosToServer,omitempty"`
+	LoadBalancingMode      string `json:"loadBalancingMode,omitempty"`
+	MinActiveMembers       int    `json:"minActiveMembers,omitempty"`
+	MinUpMembers           int    `json:"minUpMembers,omitempty"`
+	MinUpMembersAction     string `json:"minUpMembersAction,omitempty"`
+	MinUpMembersChecking   string `json:"minUpMembersChecking,omitempty"`
+	Monitor                string `json:"monitor,omitempty"`
+	QueueDepthLimit        int    `json:"queueDepthLimit,omitempty"`
+	QueueOnConnectionLimit string `json:"queueOnConnectionLimit,omitempty"`
+	QueueTimeLimit         int    `json:"queueTimeLimit,omitempty"`
+	ReselectTries          int    `json:"reselectTries,omitempty"`
+	ServiceDownAction      string `json:"serviceDownAction,omitempty"`
+	SlowRampTime           int    `json:"slowRampTime,omitempty"`
 
 	// Setting this field atomically updates all members.
 	Members *[]PoolMember `json:"members,omitempty"`
@@ -494,24 +474,23 @@ type poolMembers struct {
 // Pool Member contains information about each individual member in a pool. You can use all
 // of these fields when modifying a pool member.
 type PoolMember struct {
-	Name            string     `json:"name,omitempty"`
-	Description     string     `json:"description,omitempty"`
-	AppService      string     `json:"appService,omitempty"`
-	Partition       string     `json:"partition,omitempty"`
-	FullPath        string     `json:"fullPath,omitempty"`
-	Generation      int        `json:"generation,omitempty"`
-	Address         string     `json:"address,omitempty"`
-	ConnectionLimit int        `json:"connectionLimit,omitempty"`
-	DynamicRatio    int        `json:"dynamicRatio,omitempty"`
-	InheritProfile  string     `json:"inheritProfile,omitempty"`
-	Logging         string     `json:"logging,omitempty"`
-	Metadata        []Metadata `json:"metadata,omitempty"`
-	Monitor         string     `json:"monitor,omitempty"`
-	PriorityGroup   int        `json:"priorityGroup,omitempty"`
-	RateLimit       string     `json:"rateLimit,omitempty"`
-	Ratio           int        `json:"ratio,omitempty"`
-	Session         string     `json:"session,omitempty"`
-	State           string     `json:"state,omitempty"`
+	Name            string `json:"name,omitempty"`
+	Description     string `json:"description,omitempty"`
+	AppService      string `json:"appService,omitempty"`
+	Partition       string `json:"partition,omitempty"`
+	FullPath        string `json:"fullPath,omitempty"`
+	Generation      int    `json:"generation,omitempty"`
+	Address         string `json:"address,omitempty"`
+	ConnectionLimit int    `json:"connectionLimit,omitempty"`
+	DynamicRatio    int    `json:"dynamicRatio,omitempty"`
+	InheritProfile  string `json:"inheritProfile,omitempty"`
+	Logging         string `json:"logging,omitempty"`
+	Monitor         string `json:"monitor,omitempty"`
+	PriorityGroup   int    `json:"priorityGroup,omitempty"`
+	RateLimit       string `json:"rateLimit,omitempty"`
+	Ratio           int    `json:"ratio,omitempty"`
+	Session         string `json:"session,omitempty"`
+	State           string `json:"state,omitempty"`
 }
 
 // VirtualServers contains a list of all virtual servers on the BIG-IP system.
@@ -521,33 +500,30 @@ type VirtualServers struct {
 
 // VirtualServer contains information about each individual virtual server.
 type VirtualServer struct {
-	Name                     string        `json:"name,omitempty"`
-	Partition                string        `json:"partition,omitempty"`
-	FullPath                 string        `json:"fullPath,omitempty"`
-	Generation               int           `json:"generation,omitempty"`
-	AddressStatus            string        `json:"addressStatus,omitempty"`
-	AutoLastHop              string        `json:"autoLastHop,omitempty"`
-	CMPEnabled               string        `json:"cmpEnabled,omitempty"`
-	ConnectionLimit          int           `json:"connectionLimit,omitempty"`
-	Destination              string        `json:"destination,omitempty"`
-	Description              string        `json:"description,omitempty"`
-	Enabled                  bool          `json:"enabled,omitempty"`
-	FallbackPersistence      string        `json:"fallbackPersistence,omitempty"`
-	GTMScore                 int           `json:"gtmScore,omitempty"`
-	IPForward                bool          `json:"ipForward,omitempty"`
-	IPProtocol               string        `json:"ipProtocol,omitempty"`
-	Mask                     string        `json:"mask,omitempty"`
-	Metadata                 []Metadata    `json:"metadata,omitempty"`
-	Mirror                   string        `json:"mirror,omitempty"`
-	MobileAppTunnel          string        `json:"mobileAppTunnel,omitempty"`
-	NAT64                    string        `json:"nat64,omitempty"`
-	Persistence              []Persistence `json:"persist,omitempty"`
-	Pool                     string        `json:"pool,omitempty"`
-	RateLimit                string        `json:"rateLimit,omitempty"`
-	RateLimitDestinationMask int           `json:"rateLimitDstMask,omitempty"`
-	RateLimitMode            string        `json:"rateLimitMode,omitempty"`
-	RateLimitSourceMask      int           `json:"rateLimitSrcMask,omitempty"`
-	Source                   string        `json:"source,omitempty"`
+	Name                     string `json:"name,omitempty"`
+	Partition                string `json:"partition,omitempty"`
+	FullPath                 string `json:"fullPath,omitempty"`
+	Generation               int    `json:"generation,omitempty"`
+	AddressStatus            string `json:"addressStatus,omitempty"`
+	AutoLastHop              string `json:"autoLastHop,omitempty"`
+	CMPEnabled               string `json:"cmpEnabled,omitempty"`
+	ConnectionLimit          int    `json:"connectionLimit,omitempty"`
+	Destination              string `json:"destination,omitempty"`
+	Description              string `json:"description,omitempty"`
+	Enabled                  bool   `json:"enabled,omitempty"`
+	GTMScore                 int    `json:"gtmScore,omitempty"`
+	IPForward                bool   `json:"ipForward,omitempty"`
+	IPProtocol               string `json:"ipProtocol,omitempty"`
+	Mask                     string `json:"mask,omitempty"`
+	Mirror                   string `json:"mirror,omitempty"`
+	MobileAppTunnel          string `json:"mobileAppTunnel,omitempty"`
+	NAT64                    string `json:"nat64,omitempty"`
+	Pool                     string `json:"pool,omitempty"`
+	RateLimit                string `json:"rateLimit,omitempty"`
+	RateLimitDestinationMask int    `json:"rateLimitDstMask,omitempty"`
+	RateLimitMode            string `json:"rateLimitMode,omitempty"`
+	RateLimitSourceMask      int    `json:"rateLimitSrcMask,omitempty"`
+	Source                   string `json:"source,omitempty"`
 	SourceAddressTranslation struct {
 		Type string `json:"type,omitempty"`
 		Pool string `json:"pool,omitempty"`
@@ -674,12 +650,11 @@ type PolicyRules struct {
 }
 
 type PolicyRule struct {
-	Name        string                `json:"name,omitempty"`
-	FullPath    string                `json:"fullPath,omitempty"`
-	Ordinal     int                   `json:"ordinal,omitempty"`
-	Description string                `json:"description,omitempty"`
-	Conditions  []PolicyRuleCondition `json:"conditions,omitempty"`
-	Actions     []PolicyRuleAction    `json:"actions,omitempty"`
+	Name       string
+	FullPath   string
+	Ordinal    int
+	Conditions []PolicyRuleCondition
+	Actions    []PolicyRuleAction
 }
 
 type policyRuleDTO struct {
@@ -966,7 +941,6 @@ type Monitor struct {
 	Interval       int
 	IPDSCP         int
 	ManualResume   bool
-	Metadata       []Metadata
 	MonitorType    string
 	Password       string
 	ReceiveColumn  string
@@ -985,33 +959,32 @@ type Monitor struct {
 }
 
 type monitorDTO struct {
-	Name           string     `json:"name,omitempty"`
-	Partition      string     `json:"partition,omitempty"`
-	FullPath       string     `json:"fullPath,omitempty"`
-	Generation     int        `json:"generation,omitempty"`
-	ParentMonitor  string     `json:"defaultsFrom,omitempty"`
-	Database       string     `json:"database,omitempty"`
-	Description    string     `json:"description,omitempty"`
-	Destination    string     `json:"destination,omitempty"`
-	Interval       int        `json:"interval,omitempty"`
-	IPDSCP         int        `json:"ipDscp,omitempty"`
-	ManualResume   string     `json:"manualResume,omitempty" bool:"enabled"`
-	Metadata       []Metadata `json:"metadata,omitempty"`
-	MonitorType    string     `json:"monitorType,omitempty"`
-	Password       string     `json:"password,omitempty"`
-	ReceiveColumn  string     `json:"recvColumn,omitempty"`
-	ReceiveRow     string     `json:"recvRow,omitempty"`
-	ReceiveString  string     `json:"recv,omitempty"`
-	ReceiveDisable string     `json:"recvDisable,omitempty"`
-	Reverse        string     `json:"reverse,omitempty" bool:"enabled"`
-	ResponseTime   int        `json:"responseTime"`
-	RetryTime      int        `json:"retryTime"`
-	SendString     string     `json:"send,omitempty"`
-	TimeUntilUp    int        `json:"timeUntilUp,omitempty"`
-	Timeout        int        `json:"timeout,omitempty"`
-	Transparent    string     `json:"transparent,omitempty" bool:"enabled"`
-	UpInterval     int        `json:"upInterval,omitempty"`
-	Username       string     `json:"username,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Partition      string `json:"partition,omitempty"`
+	FullPath       string `json:"fullPath,omitempty"`
+	Generation     int    `json:"generation,omitempty"`
+	ParentMonitor  string `json:"defaultsFrom,omitempty"`
+	Database       string `json:"database,omitempty"`
+	Description    string `json:"description,omitempty"`
+	Destination    string `json:"destination,omitempty"`
+	Interval       int    `json:"interval,omitempty"`
+	IPDSCP         int    `json:"ipDscp,omitempty"`
+	ManualResume   string `json:"manualResume,omitempty" bool:"enabled"`
+	MonitorType    string `json:"monitorType,omitempty"`
+	Password       string `json:"password,omitempty"`
+	ReceiveColumn  string `json:"recvColumn,omitempty"`
+	ReceiveRow     string `json:"recvRow,omitempty"`
+	ReceiveString  string `json:"recv,omitempty"`
+	ReceiveDisable string `json:"recvDisable,omitempty"`
+	Reverse        string `json:"reverse,omitempty" bool:"enabled"`
+	ResponseTime   int    `json:"responseTime"`
+	RetryTime      int    `json:"retryTime"`
+	SendString     string `json:"send,omitempty"`
+	TimeUntilUp    int    `json:"timeUntilUp,omitempty"`
+	Timeout        int    `json:"timeout,omitempty"`
+	Transparent    string `json:"transparent,omitempty" bool:"enabled"`
+	UpInterval     int    `json:"upInterval,omitempty"`
+	Username       string `json:"username,omitempty"`
 }
 
 func (p *Monitor) MarshalJSON() ([]byte, error) {
@@ -1154,7 +1127,7 @@ func (b *BigIP) DeleteServerSSLProfile(name string) error {
 // ModifyServerSSLProfile allows you to change any attribute of a sever-ssl profile.
 // Fields that can be modified are referenced in the VirtualServer struct.
 func (b *BigIP) ModifyServerSSLProfile(name string, config *ServerSSLProfile) error {
-	return b.patch(config, uriLtm, uriProfile, uriServerSSL, name)
+	return b.put(config, uriLtm, uriProfile, uriServerSSL, name)
 }
 
 // ClientSSLProfiles returns a list of client-ssl profiles.
@@ -1205,7 +1178,7 @@ func (b *BigIP) DeleteClientSSLProfile(name string) error {
 // ModifyClientSSLProfile allows you to change any attribute of a client-ssl profile.
 // Fields that can be modified are referenced in the ClientSSLProfile struct.
 func (b *BigIP) ModifyClientSSLProfile(name string, config *ClientSSLProfile) error {
-	return b.patch(config, uriLtm, uriProfile, uriClientSSL, name)
+	return b.put(config, uriLtm, uriProfile, uriClientSSL, name)
 }
 
 // TcpProfiles returns a list of Tcp profiles
@@ -1469,22 +1442,6 @@ func (b *BigIP) Nodes() (*Nodes, error) {
 	return &nodes, nil
 }
 
-// Nodes returns a list of nodes.
-func (b *BigIP) NodesForPartition(partition string) (*Nodes, error) {
-	var nodes Nodes
-	if partition == "" {
-		return nil, fmt.Errorf("Partition cannot be empty")
-	}
-
-	filteredUri := partitionFilterUri + partition
-	err, _ := b.getForEntity(&nodes, uriLtm, uriNode, filteredUri)
-	if err != nil {
-		return nil, err
-	}
-
-	return &nodes, nil
-}
-
 // AddNode adds a new node to the BIG-IP system using a spec
 func (b *BigIP) AddNode(config *Node) error {
 	return b.post(config, uriLtm, uriNode)
@@ -1646,21 +1603,6 @@ func (b *BigIP) Pools() (*Pools, error) {
 	return &pools, nil
 }
 
-// Pools returns a list of pools.
-func (b *BigIP) PoolsForPartition(partition string) (*Pools, error) {
-	var pools Pools
-	if partition == "" {
-		return nil, fmt.Errorf("Partition cannot be empty")
-	}
-	filteredUri := partitionFilterUri + partition
-	err, _ := b.getForEntity(&pools, uriLtm, uriPool, filteredUri)
-	if err != nil {
-		return nil, err
-	}
-
-	return &pools, nil
-}
-
 // PoolMembers returns a list of pool members for the given pool.
 func (b *BigIP) PoolMembers(name string) (*PoolMembers, error) {
 	var poolMembers PoolMembers
@@ -1727,7 +1669,7 @@ func (b *BigIP) UpdatePoolMembers(pool string, pm *[]PoolMember) error {
 	config := &poolMembers{
 		Members: *pm,
 	}
-	return b.patch(config, uriLtm, uriPool, pool)
+	return b.put(config, uriLtm, uriPool, pool)
 }
 
 // RemovePoolMember removes a pool member from the specified pool.
@@ -1750,16 +1692,17 @@ func (b *BigIP) PoolMemberStatus(pool string, member string, state string, owner
 
 	switch state {
 	case "enable":
-		config.State = "user-up"
+		// config.State = "unchecked"
 		config.Session = "user-enabled"
-	case "disable": // accept new connections only if the connections belong to an existing persistence session
+	case "disable":
+		// config.State = "unchecked"
 		config.Session = "user-disabled"
-	case "offline": // no new connections are allowed
-		config.State = "user-down"
-		config.Session = "user-disabled"
+		// case "offline":
+		// 	config.State = "user-down"
+		// 	config.Session = "user-disabled"
 	}
 
-	if len(owner) > 0 && owner[0] != "" {
+	if owner[0] != "" {
 		config.AppService = owner[0]
 	}
 
@@ -1809,22 +1752,6 @@ func (b *BigIP) ModifyPool(name string, config *Pool) error {
 func (b *BigIP) VirtualServers() (*VirtualServers, error) {
 	var vs VirtualServers
 	err, _ := b.getForEntity(&vs, uriLtm, uriVirtual)
-	if err != nil {
-		return nil, err
-	}
-
-	return &vs, nil
-}
-
-// Similar to VirtualServers(), but will apply a partition filter on the
-// F5 prior to returning results
-func (b *BigIP) VirtualServersForPartition(partition string) (*VirtualServers, error) {
-	var vs VirtualServers
-	if partition == "" {
-		return nil, fmt.Errorf("Partition cannot be empty")
-	}
-	filteredUri := partitionFilterUri + partition
-	err, _ := b.getForEntity(&vs, uriLtm, uriVirtual, filteredUri)
 	if err != nil {
 		return nil, err
 	}
@@ -1889,15 +1816,9 @@ func (b *BigIP) DeleteVirtualServer(name string) error {
 }
 
 // ModifyVirtualServer allows you to change any attribute of a virtual server. Fields that
-// can be modified are referenced in the VirtualServer struct. Set all the attributes.
+// can be modified are referenced in the VirtualServer struct.
 func (b *BigIP) ModifyVirtualServer(name string, config *VirtualServer) error {
 	return b.put(config, uriLtm, uriVirtual, name)
-}
-
-// PatchVirtualServer allows you to change any attribute of a virtual server. Fields that
-// can be modified are referenced in the VirtualServer struct. Sets only the attributes specified.
-func (b *BigIP) PatchVirtualServer(name string, config *VirtualServer) error {
-	return b.patch(config, uriLtm, uriVirtual, name)
 }
 
 // VirtualServerProfiles gets the profiles currently associated with a virtual server.
@@ -1962,15 +1883,9 @@ func (b *BigIP) VirtualAddressStatus(vaddr, state string) error {
 }
 
 // ModifyVirtualAddress allows you to change any attribute of a virtual address. Fields that
-// can be modified are referenced in the VirtualAddress struct. Sets all the attributes.
+// can be modified are referenced in the VirtualAddress struct.
 func (b *BigIP) ModifyVirtualAddress(vaddr string, config *VirtualAddress) error {
 	return b.put(config, uriLtm, uriVirtualAddress, vaddr)
-}
-
-// PatchVirtualAddress allows you to change any attribute of a virtual address. Fields that
-// can be modified are referenced in the VirtualAddress struct. Sets only the attributes specified.
-func (b *BigIP) PatchVirtualAddress(vaddr string, config *VirtualAddress) error {
-	return b.patch(config, uriLtm, uriVirtualAddress, vaddr)
 }
 
 func (b *BigIP) DeleteVirtualAddress(vaddr string) error {
@@ -1995,41 +1910,6 @@ func (b *BigIP) Monitors() ([]Monitor, error) {
 	for _, name := range monitorUris {
 		var m Monitors
 		err, _ := b.getForEntity(&m, uriLtm, uriMonitor, name)
-		if err != nil {
-			return nil, err
-		}
-		for _, monitor := range m.Monitors {
-			monitor.MonitorType = name
-			monitors = append(monitors, monitor)
-		}
-	}
-
-	return monitors, nil
-}
-
-func (b *BigIP) MonitorsForPartition(partition string) ([]Monitor, error) {
-	var monitors []Monitor
-	monitorUris := []string{
-		"gateway-icmp",
-		"http",
-		"https",
-		"icmp",
-		"inband",
-		"mysql",
-		"postgresql",
-		"tcp",
-		"udp",
-	}
-
-	if partition == "" {
-		return nil, fmt.Errorf("Partition cannot be empty")
-	}
-
-	for _, name := range monitorUris {
-		var m Monitors
-		filteredUri := partitionFilterUri + partition
-
-		err, _ := b.getForEntity(&m, uriLtm, uriMonitor, name, filteredUri)
 		if err != nil {
 			return nil, err
 		}
@@ -2230,39 +2110,4 @@ func (b *BigIP) UpdatePolicy(name string, p *Policy) error {
 //Delete a policy by name.
 func (b *BigIP) DeletePolicy(name string) error {
 	return b.delete(uriLtm, uriPolicy, name, policyVersionSuffix)
-}
-
-// CreateDraftFromPolicy called name. Name must be full name (ie ~partition~policyName).
-// The draft will be created with same name in same partition:
-// /partition/Drafts/PublishedPolicyName
-func (b *BigIP) CreateDraftFromPolicy(name string) error {
-	p := struct {
-	}{}
-	return b.patch(p, uriLtm, uriPolicy, name+"?options=create-draft")
-}
-
-// PublishDraftPolicy. Name must be full path (ie /Partition/Drafts/name)
-func (b *BigIP) PublishDraftPolicy(name string) error {
-	p := struct {
-		Command string `json:"command"`
-		Name    string `json:"name"`
-	}{Command: "publish",
-		Name: name}
-
-	return b.post(p, uriLtm, uriPolicy)
-}
-
-// AddRuleToPolicy. Policy must be a draft and policyName must be the full name (ie ~Partition~Drafts~policyName)
-func (b *BigIP) AddRuleToPolicy(policyName string, rule PolicyRule) error {
-	return b.post(rule, uriLtm, uriPolicy, policyName, uriRules)
-}
-
-// ModifyPolicyRule. Policy must be a draft and policyName must be the full name (ie ~Partition~Drafts~policyName)
-func (b *BigIP) ModifyPolicyRule(policyName, ruleName string, rule PolicyRule) error {
-	return b.patch(rule, uriLtm, uriPolicy, policyName, uriRules, ruleName)
-}
-
-// RemoveRuleFromPolicy. Policy must be a draft and policyName must be the full name (ie ~Partition~Draft~policyName)
-func (b *BigIP) RemoveRuleFromPolicy(ruleName, policyName string) error {
-	return b.delete(uriLtm, uriPolicy, policyName, uriRules, ruleName)
 }

@@ -7,17 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net/http"
 	"reflect"
 	"strings"
 	"time"
-)
-
-const (
-	microToSeconds  = 1000000 // conversion factor
-	maxTokenTimeout = 36000   // maximum token timeout in seconds
 )
 
 var defaultConfigOptions = &ConfigOptions{
@@ -33,12 +27,9 @@ type BigIP struct {
 	Host          string
 	User          string
 	Password      string
-	Token         string    // if set, will be used instead of User/Password
-	TokenExpiry   time.Time // the token expiration time
+	Token         string // if set, will be used instead of User/Password
 	Transport     *http.Transport
 	ConfigOptions *ConfigOptions
-	loginProvider string
-	startTime     time.Time // token start time
 }
 
 // APIRequest builds our request before sending it to the server.
@@ -54,17 +45,6 @@ type RequestError struct {
 	Code       int      `json:"code,omitempty"`
 	Message    string   `json:"message,omitempty"`
 	ErrorStack []string `json:"errorStack,omitempty"`
-}
-
-// Upload contains information about a file upload status
-type Upload struct {
-	RemainingByteCount int64          `json:"remainingByteCount"`
-	UsedChunks         map[string]int `json:"usedChunks"`
-	TotalByteCount     int64          `json:"totalByteCount"`
-	LocalFilePath      string         `json:"localFilePath"`
-	TemporaryFilePath  string         `json:"temporaryFilePath"`
-	Generation         int            `json:"generation"`
-	LastUpdateMicros   int            `json:"lastUpdateMicros"`
 }
 
 // Error returns the error message.
@@ -95,7 +75,6 @@ func NewSession(host, user, passwd string, configOptions *ConfigOptions) *BigIP 
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: true,
 			},
-			Proxy: http.ProxyFromEnvironment,
 		},
 		ConfigOptions: configOptions,
 	}
@@ -107,10 +86,58 @@ func NewSession(host, user, passwd string, configOptions *ConfigOptions) *BigIP 
 // provider, such as Radius or Active Directory. loginProviderName is
 // probably "tmos" but your environment may vary.
 func NewTokenSession(host, user, passwd, loginProviderName string, configOptions *ConfigOptions) (b *BigIP, err error) {
+	type authReq struct {
+		Username          string `json:"username"`
+		Password          string `json:"password"`
+		LoginProviderName string `json:"loginProviderName"`
+	}
+	type authResp struct {
+		Token struct {
+			Token string
+		}
+	}
+
+	auth := authReq{
+		user,
+		passwd,
+		loginProviderName,
+	}
+
+	marshalJSON, err := json.Marshal(auth)
+	if err != nil {
+		return
+	}
+
+	req := &APIRequest{
+		Method:      "post",
+		URL:         "mgmt/shared/authn/login",
+		Body:        string(marshalJSON),
+		ContentType: "application/json",
+	}
 
 	b = NewSession(host, user, passwd, configOptions)
-	b.loginProvider = loginProviderName
-	err = b.login()
+	resp, err := b.APICall(req)
+	if err != nil {
+		return
+	}
+
+	if resp == nil {
+		err = fmt.Errorf("unable to acquire authentication token")
+		return
+	}
+
+	var aresp authResp
+	err = json.Unmarshal(resp, &aresp)
+	if err != nil {
+		return
+	}
+
+	if aresp.Token.Token == "" {
+		err = fmt.Errorf("unable to acquire authentication token")
+		return
+	}
+
+	b.Token = aresp.Token.Token
 
 	return
 }
@@ -157,27 +184,11 @@ func (b *BigIP) APICall(options *APIRequest) ([]byte, error) {
 			return data, b.checkError(data)
 		}
 
-		return data, fmt.Errorf("HTTP %d :: %s", res.StatusCode, string(data[:]))
+		return data, errors.New(fmt.Sprintf("HTTP %d :: %s", res.StatusCode, string(data[:])))
 	}
 
 	// fmt.Println("Resp --", res.StatusCode, " -- ", string(data))
 	return data, nil
-}
-
-// RefreshTokenSession refreshes the token expiration time by increasing
-// token timeout by interal.
-//
-// If the token is already expired or if the above refresh fails, a new
-// token is generated with a new login.
-func (b *BigIP) RefreshTokenSession(interval time.Duration) error {
-	if b.TokenExpiry.Sub(time.Now()) <= 0 {
-		return b.login()
-	}
-	if err := b.increaseTokenTimout(interval); err != nil {
-		fmt.Println(err)
-		return b.login()
-	}
-	return nil
 }
 
 func (b *BigIP) iControlPath(parts []string) string {
@@ -276,7 +287,7 @@ func (b *BigIP) checkError(resp []byte) error {
 
 	err := json.Unmarshal(resp, &reqError)
 	if err != nil {
-		return fmt.Errorf("%s\n%s", err.Error(), string(resp[:]))
+		return errors.New(fmt.Sprintf("%s\n%s", err.Error(), string(resp[:])))
 	}
 
 	err = reqError.Error()
@@ -379,185 +390,4 @@ func toBoolString(b bool, trueStr, falseStr string) string {
 		return trueStr
 	}
 	return falseStr
-}
-
-// Upload a file read from a Reader
-func (b *BigIP) Upload(r io.Reader, size int64, path ...string) (*Upload, error) {
-	client := &http.Client{
-		Transport: b.Transport,
-		Timeout:   b.ConfigOptions.APICallTimeout,
-	}
-	options := &APIRequest{
-		Method:      "post",
-		URL:         b.iControlPath(path),
-		ContentType: "application/octet-stream",
-	}
-	var format string
-	if strings.Contains(options.URL, "mgmt/") {
-		format = "%s/%s"
-	} else {
-		format = "%s/mgmt/%s"
-	}
-	url := fmt.Sprintf(format, b.Host, options.URL)
-	chunkSize := 512 * 1024
-	var start, end int64
-	for {
-		// Read next chunk
-		chunk := make([]byte, chunkSize)
-		n, err := r.Read(chunk)
-		if err != nil {
-			return nil, err
-		}
-		end = start + int64(n)
-		// Resize buffer size to number of bytes read
-		if n < chunkSize {
-			chunk = chunk[:n]
-		}
-		body := bytes.NewReader(chunk)
-		req, _ := http.NewRequest(strings.ToUpper(options.Method), url, body)
-		if b.Token != "" {
-			req.Header.Set("X-F5-Auth-Token", b.Token)
-		} else {
-			req.SetBasicAuth(b.User, b.Password)
-		}
-		req.Header.Add("Content-Type", options.ContentType)
-		req.Header.Add("Content-Range", fmt.Sprintf("%d-%d/%d", start, end-1, size))
-		// Try to upload chunk
-		res, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		data, _ := ioutil.ReadAll(res.Body)
-		if res.StatusCode >= 400 {
-			if res.Header.Get("Content-Type") == "application/json" {
-				return nil, b.checkError(data)
-			}
-
-			return nil, fmt.Errorf("HTTP %d :: %s", res.StatusCode, string(data[:]))
-		}
-		defer res.Body.Close()
-		var upload Upload
-		err = json.Unmarshal(data, &upload)
-		if err != nil {
-			return nil, err
-		}
-		start = end
-		if start >= size {
-			// Final chunk was uploaded
-			return &upload, err
-		}
-	}
-}
-
-// login requests a token.
-func (b *BigIP) login() error {
-	b.Token = ""
-	b.startTime = time.Now()
-	type authReq struct {
-		Username          string `json:"username"`
-		Password          string `json:"password"`
-		LoginProviderName string `json:"loginProviderName"`
-	}
-	type authResp struct {
-		Token struct {
-			Token      string
-			Expiration int `json:"expirationMicros"`
-		}
-	}
-
-	auth := authReq{
-		b.User,
-		b.Password,
-		b.loginProvider,
-	}
-
-	marshalJSON, err := json.Marshal(auth)
-	if err != nil {
-		return err
-	}
-
-	req := &APIRequest{
-		Method:      "post",
-		URL:         "mgmt/shared/authn/login",
-		Body:        string(marshalJSON),
-		ContentType: "application/json",
-	}
-
-	resp, err := b.APICall(req)
-	if err != nil {
-		return err
-	}
-
-	if resp == nil {
-		return fmt.Errorf("unable to acquire authentication token")
-	}
-
-	var aresp authResp
-	err = json.Unmarshal(resp, &aresp)
-	if err != nil {
-		return err
-	}
-
-	if aresp.Token.Token == "" {
-		return fmt.Errorf("unable to acquire authentication token")
-	}
-
-	b.Token = aresp.Token.Token
-	b.TokenExpiry = time.Unix(int64(aresp.Token.Expiration/microToSeconds), 0)
-
-	return nil
-}
-
-// increaseTokenTimeout increases token timeout by interval.
-//
-// if it exceeds maxTokenTimeout an error is returned.
-func (b *BigIP) increaseTokenTimout(interval time.Duration) error {
-	if b.Token == "" {
-		return errors.New("token refresh not possible - no token available")
-	}
-	newExpiry := time.Now().Add(interval)
-	newTimeout := int(newExpiry.Sub(b.startTime)) / int(time.Second) // big ip token timeout is always relative to start time
-	if newTimeout > maxTokenTimeout {
-		return errors.New("maximum timeout exceeded")
-	}
-
-	type refreshReq struct {
-		Timeout int `json:"timeout"`
-	}
-	type refreshResp struct {
-		Token      string
-		Expiration int `json:"expirationMicros"`
-	}
-	refreshJSON, err := json.Marshal(refreshReq{
-		Timeout: newTimeout,
-	})
-	if err != nil {
-		return err
-	}
-
-	req := &APIRequest{
-		Method:      "patch",
-		URL:         fmt.Sprintf("mgmt/shared/authz/tokens/%s", b.Token),
-		Body:        string(refreshJSON),
-		ContentType: "application/json",
-	}
-	resp, err := b.APICall(req)
-	if err != nil {
-		return err
-	}
-
-	if resp == nil {
-		return fmt.Errorf("unable to refresh authentication token")
-	}
-
-	var rresp refreshResp
-	err = json.Unmarshal(resp, &rresp)
-	if err != nil {
-		return err
-	}
-	if rresp.Expiration == 0 {
-		return fmt.Errorf("unable to refresh authentication token")
-	}
-	b.TokenExpiry = time.Unix(int64(rresp.Expiration/microToSeconds), 0)
-	return nil
 }
